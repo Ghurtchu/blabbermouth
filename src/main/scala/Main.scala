@@ -12,34 +12,45 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json.Format.GenericFormat
-import play.api.libs.json.{Format, JsArray, JsBoolean, JsError, JsNull, JsNumber, JsObject, JsResult, JsString, JsSuccess, JsValue, Json, Reads}
+import play.api.libs.json.{
+  Format,
+  JsArray,
+  JsBoolean,
+  JsError,
+  JsNull,
+  JsNumber,
+  JsObject,
+  JsResult,
+  JsString,
+  JsSuccess,
+  JsValue,
+  Json,
+  Reads,
+}
 
 import java.util.UUID
 import scala.collection.concurrent.TrieMap
 
 object Main extends IOApp.Simple {
 
-  /**
-   * Live support chat app
-   *
-   * Functionality:
-   * - any user can join the chat app and talk with the support
-   * - input your name
-   * - get queued
-   * - support notices you
-   * - joins your chat
-   * - you talk shit with him/her
-   *
-   */
+  /** Live support chat app
+    *
+    * Functionality:
+    *   - any user can join the chat app and talk with the support
+    *   - input your name
+    *   - get queued
+    *   - support notices you
+    *   - joins your chat
+    *   - you talk shit with him/her
+    */
 
   final case class ChatMetaData(chatId: String, supportId: Option[String])
 
-  type CustomerId = String
-  type CachedChatMetaData = Map[CustomerId, ChatMetaData]
+  type CustomerId          = String
+  type CachedChatMetaData  = Map[CustomerId, ChatMetaData]
   type CachedConversations = Map[CustomerId, Conversation]
 
   type TopicsCache = Map[CustomerId, Topic[IO, Message]]
-
 
   sealed trait Message
 
@@ -49,22 +60,26 @@ object Main extends IOApp.Simple {
   sealed trait FromCustomer extends In
   sealed trait FromSupport  extends In
 
-  sealed trait ToCustomer   extends Out
-  sealed trait ToSupport    extends Out
+  sealed trait ToCustomer extends Out
+  sealed trait ToSupport  extends Out
 
   sealed trait ChatMessage extends In with Out
 
   final case class MessageFromCustomer(
     customerId: String,
     supportId: String,
-    content: String
-  ) extends ChatMessage with FromCustomer with ToSupport
+    content: String,
+  ) extends ChatMessage
+      with FromCustomer
+      with ToSupport
 
   final case class MessageFromSupport(
     supportId: String,
     customerId: String,
-    content: String
-  ) extends ChatMessage with FromSupport with ToCustomer
+    content: String,
+  ) extends ChatMessage
+      with FromSupport
+      with ToCustomer
 
   final case class Conversation(messages: Vector[ChatMessage]) extends ToCustomer with ToSupport {
     def add(msg: ChatMessage): Conversation =
@@ -82,31 +97,31 @@ object Main extends IOApp.Simple {
     username: String,
     customerId: String,
     chatId: String,
-    supportId: Option[String]
+    supportId: Option[String],
   ) extends In
 
   final case class CustomerJoin(
     username: String,
     customerId: String,
     supportId: Option[String],
-    chatId: String
+    chatId: String,
   ) extends In
 
   final case class Connected(
     customerId: String,
-    username: String
+    username: String,
   ) extends ToCustomer
 
   final case class SupportJoined(
     supportId: String,
     supportUsername: String,
     customerId: String,
-    chatId: String
+    chatId: String,
   ) extends ToSupport
 
   final case class CustomerJoined(
     customerId: String,
-    chatId: String
+    chatId: String,
   ) extends ToSupport
 
   implicit val chatMsg: Format[ChatMessage] = new Format[ChatMessage] {
@@ -116,22 +131,22 @@ object Main extends IOApp.Simple {
 
     override def writes(o: ChatMessage): JsValue = o match {
       case mfc: MessageFromCustomer => msgFromCustomerFmt.writes(mfc)
-      case mfs: MessageFromSupport => msgFromSupportFmt.writes(mfs)
+      case mfs: MessageFromSupport  => msgFromSupportFmt.writes(mfs)
     }
   }
 
   implicit val msgFromCustomerFmt: Format[MessageFromCustomer] = Json.format[MessageFromCustomer]
-  implicit val msgFromSupportFmt: Format[MessageFromSupport] = Json.format[MessageFromSupport]
+  implicit val msgFromSupportFmt: Format[MessageFromSupport]   = Json.format[MessageFromSupport]
 
   implicit val conversationFmt: Format[Conversation] = Json.format[Conversation]
 
-  implicit val connectFmt: Format[Connect] = Json.format[Connect]
-  implicit val supportJoinFmt: Format[SupportJoin] = Json.format[SupportJoin]
+  implicit val connectFmt: Format[Connect]           = Json.format[Connect]
+  implicit val supportJoinFmt: Format[SupportJoin]   = Json.format[SupportJoin]
   implicit val customerJoinFmt: Format[CustomerJoin] = Json.format[CustomerJoin]
-  implicit val disconnectFmt: Format[Disconnect] = Json.format[Disconnect]
+  implicit val disconnectFmt: Format[Disconnect]     = Json.format[Disconnect]
 
-  implicit val connectedFmt: Format[Connected] = Json.format[Connected]
-  implicit val supportJoinedFmt: Format[SupportJoined] = Json.format[SupportJoined]
+  implicit val connectedFmt: Format[Connected]           = Json.format[Connected]
+  implicit val supportJoinedFmt: Format[SupportJoined]   = Json.format[SupportJoined]
   implicit val customerJoinedFmt: Format[CustomerJoined] = Json.format[CustomerJoined]
 
   final case class RequestBody(`type`: String, args: In)
@@ -139,18 +154,30 @@ object Main extends IOApp.Simple {
   implicit val RequestBodyFormat: Reads[RequestBody] = new Reads[RequestBody] {
     override def reads(json: JsValue): JsResult[RequestBody] =
       (json \ "type").validate[String] flatMap {
-        case m @ "MessageFromCustomer" => msgFromCustomerFmt.reads(json("args"))
-          .map(RequestBody(m, _))
-        case s @ "MessageFromSupport" => msgFromSupportFmt.reads(json("args"))
-          .map(RequestBody(s, _))
-        case c @ "Connect" => connectFmt.reads(json("args"))
-          .map(RequestBody(c, _))
-        case d @ "Disconnect" => disconnectFmt.reads(json("args"))
-          .map(RequestBody(d, _))
-        case j @ "SupportJoin" => supportJoinFmt.reads(json("args"))
-          .map(RequestBody(j, _))
-        case c @ "CustomerJoin" => customerJoinFmt.reads(json("args"))
-          .map(RequestBody(c, _))
+        case m @ "MessageFromCustomer" =>
+          msgFromCustomerFmt
+            .reads(json("args"))
+            .map(RequestBody(m, _))
+        case s @ "MessageFromSupport"  =>
+          msgFromSupportFmt
+            .reads(json("args"))
+            .map(RequestBody(s, _))
+        case c @ "Connect"             =>
+          connectFmt
+            .reads(json("args"))
+            .map(RequestBody(c, _))
+        case d @ "Disconnect"          =>
+          disconnectFmt
+            .reads(json("args"))
+            .map(RequestBody(d, _))
+        case j @ "SupportJoin"         =>
+          supportJoinFmt
+            .reads(json("args"))
+            .map(RequestBody(j, _))
+        case c @ "CustomerJoin"        =>
+          customerJoinFmt
+            .reads(json("args"))
+            .map(RequestBody(c, _))
       }
   }
 
@@ -164,11 +191,11 @@ object Main extends IOApp.Simple {
     // cachedChatMetaData <- IO.ref(Map.empty[CustomerId, ChatMetaData])
     // cachedConvos <- IO.ref(Map.empty[CustomerId, Conversation])
     _ <- EmberServerBuilder
-    .default[IO]
-    .withHost(host"0.0.0.0")
-    .withPort(port"8080")
-    .withHttpWebSocketApp(httpApp(_, topics))
-    .build
+      .default[IO]
+      .withHost(host"0.0.0.0")
+      .withPort(port"8080")
+      .withHttpWebSocketApp(httpApp(_, topics))
+      .build
       .useForever
   } yield ExitCode.Success
 
@@ -204,9 +231,7 @@ object Main extends IOApp.Simple {
 //          }
 //        } yield response
 
-        case chatReq @ GET -> Root / "chat" => {
-
-
+      case chatReq @ GET -> Root / "chat" =>
 //          implicit val d: Decoder[CustomerJoin] = new Decoder[CustomerJoin] {
 //            override def apply(c: HCursor): Result[CustomerJoin] =
 //              for {
@@ -230,27 +255,27 @@ object Main extends IOApp.Simple {
 
 //          implicit val RequestBodyEntityDecoder: EntityDecoder[IO, RequestBody] = jsonOf[IO, RequestBody]
 
-          val findTopicById: String => IO[Topic[IO, Message]] = chatId => topics.get.flatMap {
+        val findTopicById: String => IO[Topic[IO, Message]] = chatId =>
+          topics.get.flatMap {
             _.get(chatId)
               .map(IO.pure)
               .getOrElse(IO.raiseError(new RuntimeException(s"Chat with $chatId does not exist")))
           }
 
-          val receive: Pipe[IO, WebSocketFrame, Unit] = _.collect {
-            case text: WebSocketFrame.Text => {
-              println("line 252")
-              val body = Json.parse(text.str.trim).as[RequestBody]
-              println("243")
-              body.args match {
-                case CustomerJoin(username, customerId, supportId, chatId) =>
-                  for {
-                    _ <- IO.println("resp")
-                    topic <- findTopicById(chatId)
-                  } yield topic.publish.compose[Stream[IO, Main.Message]](_)
-              }
+        val receive: Pipe[IO, WebSocketFrame, Unit] = _.collect {
+          case text: WebSocketFrame.Text =>
+            println("line 252")
+            val body = Json.parse(text.str.trim).as[RequestBody]
+            println("243")
+            body.args match {
+              case CustomerJoin(username, customerId, supportId, chatId) =>
+                for {
+                  _     <- IO.println("resp")
+                  topic <- findTopicById(chatId)
+                } yield topic.publish.compose[Stream[IO, Main.Message]](_)
             }
-            case other => println("<other>")
-          }
+          case other                     => println("<other>")
+        }
 
 //          val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] = for {
 //              _    <- IO.println("here???????")
@@ -278,7 +303,7 @@ object Main extends IOApp.Simple {
 //                   case CustomerJoin(username, customerId, None, chatId) => {
 //                     val d: Stream[IO, Message] => Stream[IO, Unit] = topic.publish.compose[Stream[IO, Main.Message]] { _.map(identity) }
 //                     for {
-//                       _ <- IO.println("movida rogorc iqna")
+//                       _ <- IO.println("...")
 //                       a <- IO(d)
 //                     } yield a
 //
@@ -292,30 +317,30 @@ object Main extends IOApp.Simple {
 //          val receive: Pipe[IO, WebSocketFrame, Unit] = (input: Stream[IO, WebSocketFrame]) =>
 //            Stream.eval(lazyReceive).flatMap(pipe => pipe(input))
 
-          val send: Stream[IO, WebSocketFrame.Text] = Stream.eval {
+        val send: Stream[IO, WebSocketFrame.Text] = Stream
+          .eval {
             for {
               body   <- chatReq.as[String].map(Json.parse(_).as[RequestBody])
-              _ <- IO.println("298")
+              _      <- IO.println("298")
               chatId <- IO.pure(body.args match {
-                case SupportJoin(_, _, chatId, _) => chatId
+                case SupportJoin(_, _, chatId, _)  => chatId
                 case CustomerJoin(_, _, _, chatId) => chatId
               })
-              topic <- findTopicById(chatId)
-            } yield {
-              topic.subscribe(10)
-                .collect {
-                  case in: In => in match {
-                    case SupportJoin(username, customerId, chatId, supportId) =>
-                      WebSocketFrame.Text("boom 1")
-                    case CustomerJoin(username, customerId, supportId, chatId) =>
-                      WebSocketFrame.Text("boom 2")
-                  }
+              topic  <- findTopicById(chatId)
+            } yield topic
+              .subscribe(10)
+              .collect { case in: In =>
+                in match {
+                  case SupportJoin(username, customerId, chatId, supportId)  =>
+                    WebSocketFrame.Text("boom 1")
+                  case CustomerJoin(username, customerId, supportId, chatId) =>
+                    WebSocketFrame.Text("boom 2")
                 }
-            }
-          }.flatMap(identity)
+              }
+          }
+          .flatMap(identity)
 
-          wsb.build(send, receive)
-        }
+        wsb.build(send, receive)
     }
   }.orNotFound
 }
