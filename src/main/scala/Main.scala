@@ -12,24 +12,13 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json.Format.GenericFormat
-import play.api.libs.json.{
-  Format,
-  JsArray,
-  JsBoolean,
-  JsError,
-  JsNull,
-  JsNumber,
-  JsObject,
-  JsResult,
-  JsString,
-  JsSuccess,
-  JsValue,
-  Json,
-  Reads,
-}
+import play.api.libs.json.{Format, JsArray, JsBoolean, JsError, JsNull, JsNumber, JsObject, JsResult, JsString, JsSuccess, JsValue, Json, Reads}
 
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import scala.collection.concurrent.TrieMap
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.util.{Failure, Success, Try}
 
 object Main extends IOApp.Simple {
 
@@ -181,20 +170,24 @@ object Main extends IOApp.Simple {
       }
   }
 
+  type ChatId = String
+
   val run = for {
     // topics
     // customer id -> topic
-    topics <- IO.ref(Map.empty[CustomerId, Topic[IO, Message]])
-
+    topic                    <- Topic[IO, Message]
+    topics                   <- IO.ref(Map("1" -> topic))
+    q                        <- Queue.unbounded[IO, Message]
     // chats
     // chat id -> customer id
-    // cachedChatMetaData <- IO.ref(Map.empty[CustomerId, ChatMetaData])
-    // cachedConvos <- IO.ref(Map.empty[CustomerId, Conversation])
-    _ <- EmberServerBuilder
+    customerIdToChatId       <- IO.ref(Map.empty[CustomerId, ChatId])
+    customerIdToConversation <- IO.ref(Map.empty[CustomerId, Conversation])
+    _                        <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
-      .withPort(port"8080")
-      .withHttpWebSocketApp(httpApp(_, topics))
+      .withPort(port"9000")
+      .withHttpWebSocketApp(httpApp(_, topics, q, customerIdToChatId, customerIdToConversation, topic))
+      .withIdleTimeout(120.seconds)
       .build
       .useForever
   } yield ExitCode.Success
@@ -202,34 +195,41 @@ object Main extends IOApp.Simple {
   private def httpApp(
     wsb: WebSocketBuilder2[IO],
     topics: Ref[IO, TopicsCache],
+    q: Queue[IO, Message],
+    customerIdToChatId: Ref[IO, Map[CustomerId, ChatId]],
+    customerIdToConversation: Ref[IO, Map[CustomerId, Conversation]],
+    globalTopic: Topic[IO, Message],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
     HttpRoutes.of[IO] {
-//      case req @ GET -> Root / "join" =>
-//        for {
-//          connect <- req.as[String].map(Json.parse(_).as[RequestBody].args.asInstanceOf[Connect]).flatTap(IO.println)
-//          result  <- IO.delay {
-//            val chatId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
-//            val userId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
-//
-//            (connect, userId, chatId)
-//          }
-//          _        <- cachedChatMetaData.getAndUpdate(_.updated(result._2, ChatMetaData(result._3, None)))
-//          _        <- IO.println("ChatsRef:")
-//          _        <- cachedChatMetaData.get.flatTap(IO.println)
-//          topic    <- Topic[IO, Message]
-//          _        <- topicsCache.getAndUpdate(map => map.updated(result._3, topic))
-//          _        <- IO.println("TopicsRef:")
-//          _        <- topicsCache.get.flatTap(IO.println)
-//          response <- Ok {
-//            s"""{
-//              |  "username": "${result._1.username}",
-//              |  "customerId": "${result._2}",
-//              |  "chatId": "${result._3}"
-//              |}""".stripMargin
-//          }
-//        } yield response
+      case req @ GET -> Root / "join" =>
+        for {
+          connect  <- req
+            .as[String]
+            .map(Json.parse(_).as[RequestBody].args.asInstanceOf[Connect])
+            .flatTap(IO.println)
+          result   <- IO.delay {
+            val chatId     = java.util.UUID.randomUUID().toString.replaceAll("-", "")
+            val customerId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
+
+            (connect, customerId, chatId)
+          }
+          _        <- customerIdToChatId.getAndUpdate(_.updated(result._2, result._3))
+          _        <- IO.println("ChatsRef:")
+          _        <- customerIdToChatId.get.flatTap(IO.println)
+          topic    <- Topic[IO, Message]
+          _        <- topics.getAndUpdate(_.updated(result._3, topic))
+          _        <- IO.println("TopicsRef:")
+          _        <- topics.get.flatTap(IO.println)
+          response <- Ok {
+            s"""{
+              |  "username": "${result._1.username}",
+              |  "customerId": "${result._2}",
+              |  "chatId": "${result._3}"
+              |}""".stripMargin
+          }
+        } yield response
 
       case chatReq @ GET -> Root / "chat" =>
 //          implicit val d: Decoder[CustomerJoin] = new Decoder[CustomerJoin] {
@@ -262,19 +262,47 @@ object Main extends IOApp.Simple {
               .getOrElse(IO.raiseError(new RuntimeException(s"Chat with $chatId does not exist")))
           }
 
+        val rec: Pipe[IO, WebSocketFrame, Unit] = _.evalMap {
+            case text: WebSocketFrame.Text =>
+              println("line 252")
+              println(text.str)
+              val body = Try(Json.parse(text.str.trim).as[RequestBody])
+              body match {
+                case Failure(exception) => IO.unit
+                case Success(value) =>
+                  value.args match {
+                    case CustomerJoin(username, customerId, supportId, chatId) =>
+                      val d = for {
+                        _ <- IO.println("resp")
+                        topic <- findTopicById("1")
+                        _ <- IO.println("respaaaa")
+                        _ <- topic.publish1(CustomerJoin(username, customerId, supportId, chatId))
+                      } yield ()
+
+                      d
+                  }
+              }
+          }
+
         val receive: Pipe[IO, WebSocketFrame, Unit] = _.collect {
           case text: WebSocketFrame.Text =>
             println("line 252")
-            val body = Json.parse(text.str.trim).as[RequestBody]
-            println("243")
-            body.args match {
-              case CustomerJoin(username, customerId, supportId, chatId) =>
-                for {
-                  _     <- IO.println("resp")
-                  topic <- findTopicById(chatId)
-                } yield topic.publish.compose[Stream[IO, Main.Message]](_)
+            println(text.str)
+            val body = Try(Json.parse(text.str.trim).as[RequestBody])
+            body match {
+              case Failure(exception) => ()
+              case Success(value) =>
+                value.args match {
+                  case CustomerJoin(username, customerId, supportId, chatId) =>
+                    for {
+                      _ <- IO.println("resp")
+                      topic <- findTopicById(customerId)
+                    } yield topic.publish.compose[Stream[IO, WebSocketFrame]](_.collect {
+                      case WebSocketFrame.Text(str, bool) =>
+                        CustomerJoin(username, customerId, supportId, chatId)
+                    })
+                }
             }
-          case other                     => println("<other>")
         }
 
 //          val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] = for {
@@ -320,13 +348,11 @@ object Main extends IOApp.Simple {
         val send: Stream[IO, WebSocketFrame.Text] = Stream
           .eval {
             for {
-              body   <- chatReq.as[String].map(Json.parse(_).as[RequestBody])
-              _      <- IO.println("298")
-              chatId <- IO.pure(body.args match {
-                case SupportJoin(_, _, chatId, _)  => chatId
-                case CustomerJoin(_, _, _, chatId) => chatId
-              })
-              topic  <- findTopicById(chatId)
+              _     <- IO.println("xd")
+              body  <- chatReq.as[String]
+              _     <- IO.println(body)
+              topic <- findTopicById("1")
+              _     <- IO.println("here? yes")
             } yield topic
               .subscribe(10)
               .collect { case in: In =>
@@ -340,7 +366,38 @@ object Main extends IOApp.Simple {
           }
           .flatMap(identity)
 
-        wsb.build(send, receive)
+        val correctSend: IO[Stream[IO, WebSocketFrame]] =
+          for {
+            _      <- IO.println("do picia")
+            _      <- chatReq.as[String].flatTap(IO.println)
+            body   <- chatReq.as[String].map(Json.parse(_).as[RequestBody]).onError(IO.println)
+            _      <- IO.println("298")
+            chatId <- IO.pure {
+              body.args match {
+                case SupportJoin(username, customerId, chatId, supportId)  => chatId
+                case CustomerJoin(username, customerId, supportId, chatId) => chatId
+              }
+            }
+            topic  <- findTopicById(chatId)
+            stream <- IO {
+              topic.subscribe(10).collect { case in: In =>
+                in match {
+                  case SupportJoin(username, customerId, chatId, supportId)  =>
+                    WebSocketFrame.Text("erti")
+                  case CustomerJoin(username, customerId, supportId, chatId) =>
+                    WebSocketFrame.Text("erti")
+                }
+              }
+            }
+
+          } yield stream
+
+        val da: Stream[IO, WebSocketFrame] = Stream.eval(correctSend).flatten
+
+        val str = Stream.awakeEvery[IO](5.seconds).as(WebSocketFrame.Text("response"))
+
+
+        wsb.build(send, rec)
     }
   }.orNotFound
 }
