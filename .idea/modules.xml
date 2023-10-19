@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="ProjectModuleManager">
-    <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/modules/live-chat-support.iml" filepath="$PROJECT_DIR$/.idea/modules/live-chat-support.iml" />
-      <module fileurl="file://$PROJECT_DIR$/.idea/modules/live-chat-support-build.iml" filepath="$PROJECT_DIR$/.idea/modules/live-chat-support-build.iml" />
-    </modules>
-  </component>
-</project>
