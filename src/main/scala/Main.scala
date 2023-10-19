@@ -1,10 +1,13 @@
 import cats.effect.std.Queue
 import cats.effect.{ExitCode, IO, IOApp, Ref}
 import com.comcast.ip4s.IpLiteralSyntax
-import fs2.Stream
+import fs2.{Pipe, Stream}
 import fs2.concurrent.Topic
+import io.circe.Decoder.Result
+import io.circe.{Decoder, DecodingFailure, HCursor}
+import org.http4s.circe.jsonOf
 import org.http4s.dsl.Http4sDsl
-import org.http4s.{HttpApp, HttpRoutes}
+import org.http4s.{EntityDecoder, HttpApp, HttpRoutes}
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
@@ -23,7 +26,9 @@ object Main extends IOApp.Simple {
    * - any user can join the chat app and talk with the support
    * - input your name
    * - get queued
-   * - join the chat support
+   * - support notices you
+   * - joins your chat
+   * - you talk shit with him/her
    *
    */
 
@@ -49,8 +54,17 @@ object Main extends IOApp.Simple {
 
   sealed trait ChatMessage extends In with Out
 
-  final case class MessageFromCustomer(customerId: String, supportId: String, content: String) extends ChatMessage with FromCustomer with ToSupport
-  final case class MessageFromSupport(supportId: String, customerId: String, content: String)  extends ChatMessage with FromSupport with ToCustomer
+  final case class MessageFromCustomer(
+    customerId: String,
+    supportId: String,
+    content: String
+  ) extends ChatMessage with FromCustomer with ToSupport
+
+  final case class MessageFromSupport(
+    supportId: String,
+    customerId: String,
+    content: String
+  ) extends ChatMessage with FromSupport with ToCustomer
 
   final case class Conversation(messages: Vector[ChatMessage]) extends ToCustomer with ToSupport {
     def add(msg: ChatMessage): Conversation =
@@ -64,53 +78,78 @@ object Main extends IOApp.Simple {
   final case class Connect(username: String) extends FromCustomer
   final case class Disconnect(id: String)    extends FromCustomer
 
-  final case class SupportJoin(username: String, customerId: String, chatId: String, supportId: Option[String]) extends In
-  final case class CustomerJoin(username: String, customerId: String, supportId: Option[String]) extends In
+  final case class SupportJoin(
+    username: String,
+    customerId: String,
+    chatId: String,
+    supportId: Option[String]
+  ) extends In
 
-  final case class Connected(customerId: String, username: String) extends ToCustomer
-  final case class SupportJoined(supportId: String, supportUsername: String, customerId: String, chatId: String) extends ToSupport
-  final case class CustomerJoined(customerId: String, chatId: String) extends ToSupport
+  final case class CustomerJoin(
+    username: String,
+    customerId: String,
+    supportId: Option[String],
+    chatId: String
+  ) extends In
 
-  implicit val ChatMessageFormat: Format[ChatMessage] = new Format[ChatMessage] {
+  final case class Connected(
+    customerId: String,
+    username: String
+  ) extends ToCustomer
+
+  final case class SupportJoined(
+    supportId: String,
+    supportUsername: String,
+    customerId: String,
+    chatId: String
+  ) extends ToSupport
+
+  final case class CustomerJoined(
+    customerId: String,
+    chatId: String
+  ) extends ToSupport
+
+  implicit val chatMsg: Format[ChatMessage] = new Format[ChatMessage] {
     override def reads(json: JsValue): JsResult[ChatMessage] =
-      MessageFromCustomerFormat.reads(json) orElse MessageFromSupportFormat.reads(json)
+      msgFromCustomerFmt.reads(json) orElse
+        msgFromSupportFmt.reads(json)
 
     override def writes(o: ChatMessage): JsValue = o match {
-      case mfc @ MessageFromCustomer(customerId, supportId, content) => MessageFromCustomerFormat.writes(mfc)
-      case mfs @ MessageFromSupport(supportId, customerId, content) => MessageFromSupportFormat.writes(mfs)
+      case mfc: MessageFromCustomer => msgFromCustomerFmt.writes(mfc)
+      case mfs: MessageFromSupport => msgFromSupportFmt.writes(mfs)
     }
   }
 
-  implicit val MessageFromCustomerFormat: Format[MessageFromCustomer] = Json.format[MessageFromCustomer]
-  implicit val MessageFromSupportFormat: Format[MessageFromSupport] = Json.format[MessageFromSupport]
+  implicit val msgFromCustomerFmt: Format[MessageFromCustomer] = Json.format[MessageFromCustomer]
+  implicit val msgFromSupportFmt: Format[MessageFromSupport] = Json.format[MessageFromSupport]
 
-  implicit val ConversationFormat: Format[Conversation] = Json.format[Conversation]
+  implicit val conversationFmt: Format[Conversation] = Json.format[Conversation]
 
-  implicit val ConnectFormat: Format[Connect] = Json.format[Connect]
-  implicit val SupportJoinFormat: Format[SupportJoin] = Json.format[SupportJoin]
-  implicit val CustomerJoinFormat: Format[CustomerJoin] = Json.format[CustomerJoin]
-  implicit val DisconnectFormat: Format[Disconnect] = Json.format[Disconnect]
+  implicit val connectFmt: Format[Connect] = Json.format[Connect]
+  implicit val supportJoinFmt: Format[SupportJoin] = Json.format[SupportJoin]
+  implicit val customerJoinFmt: Format[CustomerJoin] = Json.format[CustomerJoin]
+  implicit val disconnectFmt: Format[Disconnect] = Json.format[Disconnect]
 
-  implicit val ConnectedFormat: Format[Connected] = Json.format[Connected]
-  implicit val SupportJoinedFormat: Format[SupportJoined] = Json.format[SupportJoined]
-  implicit val CustomerJoinedFormat: Format[CustomerJoined] = Json.format[CustomerJoined]
+  implicit val connectedFmt: Format[Connected] = Json.format[Connected]
+  implicit val supportJoinedFmt: Format[SupportJoined] = Json.format[SupportJoined]
+  implicit val customerJoinedFmt: Format[CustomerJoined] = Json.format[CustomerJoined]
 
   final case class RequestBody(`type`: String, args: In)
 
   implicit val RequestBodyFormat: Reads[RequestBody] = new Reads[RequestBody] {
     override def reads(json: JsValue): JsResult[RequestBody] =
       (json \ "type").validate[String] flatMap {
-        case m @ "MessageFromCustomer" => MessageFromCustomerFormat.reads(json("args"))
+        case m @ "MessageFromCustomer" => msgFromCustomerFmt.reads(json("args"))
           .map(RequestBody(m, _))
-        case s @ "MessageFromSupport" => MessageFromSupportFormat.reads(json("args"))
+        case s @ "MessageFromSupport" => msgFromSupportFmt.reads(json("args"))
           .map(RequestBody(s, _))
-        case c @ "Connect" => ConnectFormat.reads(json("args"))
+        case c @ "Connect" => connectFmt.reads(json("args"))
           .map(RequestBody(c, _))
-        case d @ "Disconnect" => DisconnectFormat.reads(json("args"))
+        case d @ "Disconnect" => disconnectFmt.reads(json("args"))
           .map(RequestBody(d, _))
-        case j @ "SupportJoin" => SupportJoinFormat.reads(json("args"))
+        case j @ "SupportJoin" => supportJoinFmt.reads(json("args"))
           .map(RequestBody(j, _))
-        case c @ "CustomerJoin" => CustomerJoinFormat.reads(json("args"))
+        case c @ "CustomerJoin" => customerJoinFmt.reads(json("args"))
           .map(RequestBody(c, _))
       }
   }
@@ -118,209 +157,165 @@ object Main extends IOApp.Simple {
   val run = for {
     // topics
     // customer id -> topic
-    topicsRef <- IO.ref(Map.empty[CustomerId, Topic[IO, Message]])
+    topics <- IO.ref(Map.empty[CustomerId, Topic[IO, Message]])
 
     // chats
     // chat id -> customer id
-    cachedChatMetaData <- IO.ref(Map.empty[CustomerId, ChatMetaData])
-    cachedConversations <- IO.ref(Map.empty[CustomerId, Conversation])
+    // cachedChatMetaData <- IO.ref(Map.empty[CustomerId, ChatMetaData])
+    // cachedConvos <- IO.ref(Map.empty[CustomerId, Conversation])
     _ <- EmberServerBuilder
     .default[IO]
     .withHost(host"0.0.0.0")
     .withPort(port"8080")
-    .withHttpWebSocketApp(httpApp(_, cachedChatMetaData, topicsRef, cachedConversations))
+    .withHttpWebSocketApp(httpApp(_, topics))
     .build
       .useForever
   } yield ExitCode.Success
 
   private def httpApp(
-                       wsb: WebSocketBuilder2[IO],
-                       cachedChatMetaData: Ref[IO, CachedChatMetaData],
-                       topicsCache: Ref[IO, TopicsCache],
-                       cachedConversations: Ref[IO, Map[CustomerId, Conversation]]
+    wsb: WebSocketBuilder2[IO],
+    topics: Ref[IO, TopicsCache],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
     HttpRoutes.of[IO] {
-      case req @ GET -> Root / "join" =>
-        for {
-          connect <- req.as[String].map(Json.parse(_).as[RequestBody].args.asInstanceOf[Connect]).flatTap(IO.println)
-          result  <- IO.delay {
-            val chatId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
-            val userId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
+//      case req @ GET -> Root / "join" =>
+//        for {
+//          connect <- req.as[String].map(Json.parse(_).as[RequestBody].args.asInstanceOf[Connect]).flatTap(IO.println)
+//          result  <- IO.delay {
+//            val chatId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
+//            val userId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
+//
+//            (connect, userId, chatId)
+//          }
+//          _        <- cachedChatMetaData.getAndUpdate(_.updated(result._2, ChatMetaData(result._3, None)))
+//          _        <- IO.println("ChatsRef:")
+//          _        <- cachedChatMetaData.get.flatTap(IO.println)
+//          topic    <- Topic[IO, Message]
+//          _        <- topicsCache.getAndUpdate(map => map.updated(result._3, topic))
+//          _        <- IO.println("TopicsRef:")
+//          _        <- topicsCache.get.flatTap(IO.println)
+//          response <- Ok {
+//            s"""{
+//              |  "username": "${result._1.username}",
+//              |  "customerId": "${result._2}",
+//              |  "chatId": "${result._3}"
+//              |}""".stripMargin
+//          }
+//        } yield response
 
-            (connect, userId, chatId)
+        case chatReq @ GET -> Root / "chat" => {
+
+
+//          implicit val d: Decoder[CustomerJoin] = new Decoder[CustomerJoin] {
+//            override def apply(c: HCursor): Result[CustomerJoin] =
+//              for {
+//                chatId <- c.get[String]("chatId")
+//                customerId <- c.get[String]("customerId")
+//                username <- c.get[String]("username")
+//              } yield CustomerJoin(username, customerId, None, chatId)
+//          }
+
+//          implicit val RequestBodyDecoder: Decoder[RequestBody] = new Decoder[RequestBody] {
+//            final def apply(c: HCursor): Decoder.Result[RequestBody] = {
+//              for {
+//                messageType <- c.get[String]("type")
+//                args <- messageType match {
+//                  case "CustomerJoin" => c.get[CustomerJoin]("args")
+//                  case _ => Left(DecodingFailure("Invalid message type", c.history))
+//                }
+//              } yield RequestBody(messageType, args)
+//            }
+//          }
+
+//          implicit val RequestBodyEntityDecoder: EntityDecoder[IO, RequestBody] = jsonOf[IO, RequestBody]
+
+          val findTopicById: String => IO[Topic[IO, Message]] = chatId => topics.get.flatMap {
+            _.get(chatId)
+              .map(IO.pure)
+              .getOrElse(IO.raiseError(new RuntimeException(s"Chat with $chatId does not exist")))
           }
-          _        <- cachedChatMetaData.getAndUpdate(_.updated(result._2, ChatMetaData(result._3, None)))
-          _        <- IO.println("ChatsRef:")
-          _        <- cachedChatMetaData.get.flatTap(IO.println)
-          topic    <- Topic[IO, Message]
-          _        <- topicsCache.getAndUpdate(map => map.updated(result._3, topic))
-          _        <- IO.println("TopicsRef:")
-          _        <- topicsCache.get.flatTap(IO.println)
-          response <- Ok {
-            s"""{
-              |  "username": "${result._1.username}",
-              |  "customerId": "${result._2}"
-              |  "chatId": "${result._3}"
-              |}""".stripMargin
-          }
-        } yield response
 
-      case GET -> Root / "chat" / chatId => {
-
-        val lazyTopic = topicsCache.get.flatMap {
-          _.get(chatId)
-            .map(IO.pure)
-            .getOrElse(IO.raiseError(new RuntimeException(s"Chat with $chatId does not exist")))
-        }
-
-        val lazySend: IO[Stream[IO, WebSocketFrame.Text]] = lazyTopic.map {
-          _.subscribe(maxQueued = 10)
-            .evalMapFilter {
-              case out: Out => out match {
-
-                case j@SupportJoined(supportId, supportUsername, toCustomerId, chatId) =>
+          val receive: Pipe[IO, WebSocketFrame, Unit] = _.collect {
+            case text: WebSocketFrame.Text => {
+              println("line 252")
+              val body = Json.parse(text.str.trim).as[RequestBody]
+              println("243")
+              body.args match {
+                case CustomerJoin(username, customerId, supportId, chatId) =>
                   for {
-                    _ <- cachedChatMetaData.getAndUpdate(_.updated(toCustomerId, ChatMetaData(chatId, Some(supportId))))
-                      .flatTap(IO.println)
-                    resp <- IO.pure {
-                      Some {
-                        WebSocketFrame.Text {
-                          s"""
-                            |{
-                            |  "supportId": "${supportId}"
-                            |}
-                            |""".stripMargin
-                        }
-                      }
-                    }
-                  } yield resp
-
-                case mfc@MessageFromCustomer(customerId, supportId, content) =>
-                  for {
-                    isValid  <- cachedChatMetaData.get.map {
-                      _.get(customerId)
-                        .map(_.supportId)
-                        .exists(_.contains(supportId))
-                    }
-                    _ <- cachedConversations.getAndUpdate { map =>
-                      map.updatedWith(customerId) {
-                        case Some(conversation) => Some(conversation.add(mfc))
-                        case None               => Some(Conversation(Vector(mfc)))
-                      }
-                    }
-                    response <- IO.pure(Option.when(isValid)(WebSocketFrame.Text(content)))
-                  } yield response
-
-                case mfs@MessageFromSupport(supportId, customerId, content) =>
-                  for {
-                    isValid <- cachedChatMetaData.get.map {
-                      _.get(customerId)
-                        .map(_.supportId)
-                        .exists(_.contains(supportId))
-                    }
-                    _ <- cachedConversations.getAndUpdate { map =>
-                      map.updatedWith(customerId) {
-                        case Some(conversation) => Some(conversation.add(mfs))
-                        case None => Some(Conversation(Vector(mfs)))
-                      }
-                    }
-                    response <- IO.pure(Option.when(isValid)(WebSocketFrame.Text(content)))
-                  } yield response
-                case conv @ Conversation(msgs) => IO.pure(Option(WebSocketFrame.Text(ConversationFormat.writes(conv).toString())))
-
-                case _: CustomerJoined => IO.pure(Some(WebSocketFrame.Text("Waiting for support...")))
-
+                    _ <- IO.println("resp")
+                    topic <- findTopicById(chatId)
+                  } yield topic.publish.compose[Stream[IO, Main.Message]](_)
               }
             }
-        }
+            case other => println("<other>")
+          }
 
-        val lazyReceive = lazyTopic.map { topic =>
-          topic.publish
-            .compose[Stream[IO, WebSocketFrame]](_.evalMapFilter {
-              case text: WebSocketFrame.Text => {
-                val request = Json.parse(text.str.trim).as[RequestBody]
-                request.args match {
-                  case mfc: MessageFromCustomer =>
-                    for {
-                      isValid <- cachedChatMetaData.get.map {
-                        _.get(mfc.customerId)
-                          .map(_.supportId)
-                          .exists(_.contains(mfc.supportId))
-                      }
-                      msg <- IO(Option.when(isValid)(mfc))
-                    } yield msg
-                  case mfs: MessageFromSupport =>
-                    for {
-                      isValid <- cachedChatMetaData.get.map {
-                        _.get(mfs.customerId)
-                          .map(_.supportId)
-                          .exists(_.contains(mfs.supportId))
-                      }
-                      msg <- IO(Option.when(isValid)(mfs))
-                    } yield msg
-                  case SupportJoin(supportUsername, customerId, chatId, None) =>
-                    for {
-//                      exists <- cachedChatMetaData.get.map {
-//                        _.get(customerId)
-//                          .map(_.chatId)
-//                          .exists(_.contains(chatId))
-//                      }
-                      // _ <- IO.println(s"exists? $exists")
-                      msg <- IO.delay {
-                        val supportId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
-                        println("here :))")
+//          val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] = for {
+//              _    <- IO.println("here???????")
+//              chatId <- chatReq.as[RequestBody].onError(IO.println)
+//              _    <- IO.println(chatId)
+////              chatId <- IO.pure(body.args match {
+////                case SupportJoin(_, _, chatId, _) => chatId
+////                case CustomerJoin(_, _, _, chatId) => chatId
+////              })
+//              _ <- IO.println("for real dude?")
+//              topic <- findTopic(chatId.args.asInstanceOf[CustomerJoin].chatId)
+//              _     <- IO.println(s"topic: $topic")
+//            } yield {
+//             val str: Pipe[IO, WebSocketFrame, Unit] = _.collect {
+//               case text: WebSocketFrame.Text =>
+//                 println("here")
+//                 val body = Json.parse(text.str.trim).as[RequestBody]
+//                 println(body)
+//                 body.args match {
+//                   case customer: FromCustomer => ???
+//                   case support: FromSupport => ???
+//                   case message: ChatMessage => ???
+//                   case SupportJoin(username, customerId, chatId, supportId) => ???
+//                   // first join customer
+//                   case CustomerJoin(username, customerId, None, chatId) => {
+//                     val d: Stream[IO, Message] => Stream[IO, Unit] = topic.publish.compose[Stream[IO, Main.Message]] { _.map(identity) }
+//                     for {
+//                       _ <- IO.println("movida rogorc iqna")
+//                       a <- IO(d)
+//                     } yield a
+//
+//                   }
+//                 }
+//             }
+//
+//                 str
+//          }
 
-                        Some(SupportJoined(supportId, supportUsername, customerId, chatId))
-                      }
-                    } yield msg
+//          val receive: Pipe[IO, WebSocketFrame, Unit] = (input: Stream[IO, WebSocketFrame]) =>
+//            Stream.eval(lazyReceive).flatMap(pipe => pipe(input))
 
-                  case SupportJoin(supportUsername, customerId, chatId, Some(supportId)) =>
-                    for {
-                      exists <- cachedChatMetaData.get.map {
-                        _.get(customerId)
-                          .map(_.chatId)
-                          .exists(_.contains(chatId))
-                      }
-                      _ <- IO.println(s"exists? $exists")
-                      convos <- cachedConversations.get.map(_.getOrElse(customerId, Conversation.empty))
-                      msg <- if (exists) IO(Some(convos)) else IO.delay {
-
-                        Some(SupportJoined(supportId, supportUsername, customerId, chatId))
-                      }
-                    } yield msg
-
-                  case CustomerJoin(username, customerId, Some(supportId)) =>
-                    for {
-                      exists <- cachedChatMetaData.get.map {
-                        _.get(customerId)
-                          .map(_.supportId)
-                          .exists(_.contains(supportId))
-                      }
-                      _ <- IO.println {
-                        if (exists) println("support and customer already exists")
-                        else println("support and customer already exists not ")
-                      }
-                      convos <- cachedConversations.get.map(_.getOrElse(customerId, Conversation.empty))
-                      msg <- if (exists) IO(Some(convos)) else IO.pure(Some(CustomerJoined(customerId, chatId)))
-                    } yield msg
-
-                  case CustomerJoin(username, customerId, None) =>
-                    IO.pure(Some(CustomerJoined(customerId, chatId)))
+          val send: Stream[IO, WebSocketFrame.Text] = Stream.eval {
+            for {
+              body   <- chatReq.as[String].map(Json.parse(_).as[RequestBody])
+              _ <- IO.println("298")
+              chatId <- IO.pure(body.args match {
+                case SupportJoin(_, _, chatId, _) => chatId
+                case CustomerJoin(_, _, _, chatId) => chatId
+              })
+              topic <- findTopicById(chatId)
+            } yield {
+              topic.subscribe(10)
+                .collect {
+                  case in: In => in match {
+                    case SupportJoin(username, customerId, chatId, supportId) =>
+                      WebSocketFrame.Text("boom 1")
+                    case CustomerJoin(username, customerId, supportId, chatId) =>
+                      WebSocketFrame.Text("boom 2")
+                  }
                 }
+            }
+          }.flatMap(identity)
 
-              }
-            })
+          wsb.build(send, receive)
         }
-
-        val send: Stream[IO, WebSocketFrame.Text] = Stream.eval(lazySend).flatMap(identity)
-
-        val receive: Stream[IO, WebSocketFrame] => Stream[IO, Nothing] = (input: Stream[IO, WebSocketFrame]) =>
-          Stream.eval(lazyReceive).flatMap(f => f(input))
-
-        wsb.build(send, receive)
-      }
     }
   }.orNotFound
 }
