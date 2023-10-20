@@ -8,7 +8,20 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json.Format.GenericFormat
-import play.api.libs.json.{Format, JsObject, JsResult, JsString, JsValue, Json, Reads, Writes}
+import play.api.libs.json.{
+  Format,
+  JsArray,
+  JsBoolean,
+  JsNull,
+  JsNumber,
+  JsObject,
+  JsResult,
+  JsString,
+  JsValue,
+  Json,
+  Reads,
+  Writes,
+}
 
 import scala.concurrent.duration.DurationInt
 import scala.util.{Failure, Success, Try}
@@ -41,22 +54,22 @@ object Main extends IOApp.Simple {
   sealed trait ChatMessage                                                                extends In with Out
   final case class MessageFromUser(userId: String, supportId: String, content: String)    extends ChatMessage
   final case class MessageFromSupport(supportId: String, userId: String, content: String) extends ChatMessage
-  final case class Conversation(messages: Vector[ChatMessage]) {
+  final case class Conversation(messages: Vector[ChatMessage])                            extends Out {
     def add(msg: ChatMessage): Conversation =
       copy(messages :+ msg)
   }
-  object Conversation                                          {
+  object Conversation {
     def empty: Conversation = Conversation(Vector.empty)
   }
-  final case class Connect(username: String) extends In
+  final case class Connect(username: String)                                              extends In
   final case class SupportJoin(username: String, userId: String, chatId: String, supportId: Option[String])
       extends In
   final case class UserJoin(username: String, userId: String, supportId: Option[String], chatId: String)
       extends In
-  final case class Connected(userId: String, username: String, chatId: String) extends Out
+  final case class Connected(userId: String, username: String, chatId: String)            extends Out
   final case class SupportJoined(supportId: String, supportUsername: String, userId: String, chatId: String)
       extends Out
-  final case class UserJoined(userId: String, chatId: String)                  extends Out
+  final case class UserJoined(userId: String, chatId: String)                             extends Out
 
   implicit val chatMsg: Format[ChatMessage] = new Format[ChatMessage] {
     override def reads(json: JsValue): JsResult[ChatMessage] =
@@ -71,13 +84,26 @@ object Main extends IOApp.Simple {
 
   implicit val msgFromUserFmt: Format[MessageFromUser]       = Json.format[MessageFromUser]
   implicit val msgFromSupportFmt: Format[MessageFromSupport] = Json.format[MessageFromSupport]
-  implicit val conversationFmt: Format[Conversation]         = Json.format[Conversation]
-  implicit val connectFmt: Format[Connect]                   = Json.format[Connect]
-  implicit val supportJoinFmt: Format[SupportJoin]           = Json.format[SupportJoin]
-  implicit val userJoinFmt: Format[UserJoin]                 = Json.format[UserJoin]
-  implicit val connectedFmt: Format[Connected]               = Json.format[Connected]
-  implicit val supportJoinedFmt: Format[SupportJoined]       = Json.format[SupportJoined]
-  implicit val userJoinedFmt: Format[UserJoined]             = Json.format[UserJoined]
+
+  implicit val conversationFmt: Writes[Conversation] = new Writes[Conversation] {
+    override def writes(o: Conversation): JsValue = {
+      val jsObjects: Seq[JsObject] = o.messages.map { msg =>
+        chatMsg.writes(msg) match {
+          case js: JsObject => js + ("type" -> JsString(msg.getClass.getSimpleName))
+        }
+
+      }
+
+      JsObject(Map("messages" -> JsArray(jsObjects)))
+    }
+  }
+
+  implicit val connectFmt: Format[Connect]             = Json.format[Connect]
+  implicit val supportJoinFmt: Format[SupportJoin]     = Json.format[SupportJoin]
+  implicit val userJoinFmt: Format[UserJoin]           = Json.format[UserJoin]
+  implicit val connectedFmt: Format[Connected]         = Json.format[Connected]
+  implicit val supportJoinedFmt: Format[SupportJoined] = Json.format[SupportJoined]
+  implicit val userJoinedFmt: Format[UserJoined]       = Json.format[UserJoined]
 
   final case class Request(requestType: String, args: In)
   final case class Response(args: Out)
@@ -102,6 +128,7 @@ object Main extends IOApp.Simple {
     case c: Connected     => connectedFmt.writes(c)
     case s: SupportJoined => supportJoinedFmt.writes(s)
     case u: UserJoined    => userJoinedFmt.writes(u)
+    case c: Conversation  => conversationFmt.writes(c)
   }
 
   implicit val OutRequestBodyFormat: Writes[Response] = new Writes[Response] {
@@ -136,7 +163,7 @@ object Main extends IOApp.Simple {
     wsb: WebSocketBuilder2[IO],
     topics: Ref[IO, TopicsCache],
     userIdToChatId: Ref[IO, Map[UserId, ChatId]],
-    customerIdToConversation: Ref[IO, Map[UserId, Conversation]],
+    chatIdToConversation: Ref[IO, Map[ChatId, Conversation]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -165,31 +192,68 @@ object Main extends IOApp.Simple {
               .getOrElse(IO.raiseError(new RuntimeException(s"Chat with $chatId does not exist")))
           }
 
+        val findConvoByChatId: String => IO[Conversation] = chatId =>
+          chatIdToConversation.get.flatMap {
+            _.get(chatId)
+              .map { c =>
+                println("found chat")
+                IO.pure(c)
+              }
+              .getOrElse {
+                println("couldn't find chat, raising error")
+                IO.raiseError(new RuntimeException(s"Conversation with $chatId does not exist"))
+              }
+          }
+
         val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] =
           for {
             topic <- findTopicById(chatId)
           } yield topic.publish
-            .compose[Stream[IO, WebSocketFrame]](_.collect { case text: WebSocketFrame.Text =>
+            .compose[Stream[IO, WebSocketFrame]](_.evalMap { case text: WebSocketFrame.Text =>
               println(text.str)
               Json
                 .parse(text.str)
                 .as[Request]
                 .args match {
                 // User joins for the first time
-                case UserJoin(username, userId, None, chatId)    =>
+                case UserJoin(username, userId, None, chatId)               =>
                   println(s"[USER]$username is trying to connect")
-                  UserJoined(userId, chatId)
+
+                  IO(UserJoined(userId, chatId))
+
+                // User re-joins (browser refresh)
+                case UserJoin(username, userId, Some(supportId), chatId)    =>
+                  for {
+                    convo <- findConvoByChatId(chatId)
+                  } yield convo
 
                 // Support joins for the first time
-                case SupportJoin(username, userId, chatId, None) =>
+                case SupportJoin(username, userId, chatId, None)            =>
                   println(s"[SUPPORT] $username is trying to connect")
                   val supportId = java.util.UUID.randomUUID().toString.replaceAll("-", "")
 
-                  SupportJoined(supportId, username, userId, chatId)
+                  for {
+                    _ <- chatIdToConversation.getAndUpdate(_.updated(chatId, Conversation.empty))
+                    _ <- IO.println(s"initialized empty chat for $chatId")
+                  } yield SupportJoined(supportId, username, userId, chatId)
 
-                case mfu: MessageFromUser => mfu
+                // Support re-joins (browser refresh)
+                case SupportJoin(username, userId, chatId, Some(supportId)) =>
+                  for {
+                    convo <- findConvoByChatId(chatId)
+                  } yield convo
 
-                case mfs: MessageFromSupport => mfs
+                case mfu: MessageFromUser =>
+                  for {
+                    convo <- findConvoByChatId(chatId)
+                    _     <- chatIdToConversation.getAndUpdate(_.updated(chatId, convo.add(mfu)))
+                  } yield mfu
+
+                case mfs: MessageFromSupport =>
+                  for {
+                    convo <- findConvoByChatId(chatId)
+                    _     <- chatIdToConversation.getAndUpdate(_.updated(chatId, convo.add(mfs)))
+                  } yield mfs
 
               }
             })
