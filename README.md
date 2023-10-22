@@ -116,7 +116,7 @@
    
 Each chat expires after two minutes of inactivity. Also, WebSocket connection automatically closes after 120 seconds of inactivity.
 
-In case either `User` or `Support` refreshes browser backend either loads:
+In case `User` or `Support` refreshes browser backend either loads:
 - conversation history (if the chat is still active)
 - message about chat expiration (if the chat was expired)
 
