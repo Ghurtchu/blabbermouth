@@ -120,11 +120,17 @@ object Main extends IOApp.Simple {
     case c: Connected   => connectedFmt.writes(c)
     case c: ChatHistory => chatHistoryFmt.writes(c)
     case j: Joined      => joinedFmt.writes(j)
+    case c: ChatExpired => chatExpiredFmt.writes(c)
   }
   implicit val responseFmt: Writes[Response]       = response => {
     val `type` = response.args.getClass.getSimpleName
     JsObject(Map("type" -> JsString(`type`), "args" -> outFmt.writes(response.args)))
   }
+
+  final case class ChatExpired(chatId: String) extends Out
+
+  implicit val chatExpiredFmt: Format[ChatExpired] = Json.format[ChatExpired]
+
   private def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
   val run = (for {
@@ -154,11 +160,8 @@ object Main extends IOApp.Simple {
     def asJson: String = Json.prettyPrint(Json.toJson(self))
   }
 
-  private def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[A] = cache.get.flatMap {
-    _.get(id)
-      .map(IO(_))
-      .getOrElse(IO.raiseError(new RuntimeException(s"item with $id does not exist")))
-  }
+  def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] =
+    cache.get.flatMap(c => IO(c.get(id)))
 
   private def httpApp(
     wsb: WebSocketBuilder2[IO],
@@ -179,36 +182,46 @@ object Main extends IOApp.Simple {
           } yield response
         }
       case GET -> Root / "chat" / chatId            =>
-        val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] = for {
-          topic <- findById(topics)(chatId)
-        } yield topic.publish
-          .compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
-            Json.parse(body).as[Request].args match {
-              // User joins for the first time
-              case Join(u @ User, userId, _, _, None, None) => IO(Joined(u, userId, chatId, None, None))
-              // User re-joins (browser refresh), so we load chat history
-              case Join(User, _, _, _, Some(_), _)          => findById(chatHistory)(chatId)
-              // Support joins for the first time
-              case Join(s @ Support, userId, _, chatId, None, u @ Some(_)) =>
-                for {
-                  supportId <- generateRandomId
-                  _         <- chatHistory.getAndUpdate(_.updated(chatId, ChatHistory(Vector.empty)))
-                } yield Joined(s, userId, chatId, Some(supportId), u)
-              // Support re-joins (browser refresh), so we load chat history
-              case Join(Support, _, _, _, Some(_), Some(_))                => findById(chatHistory)(chatId)
-              // chat message either from user or support
-              case msg: ChatMessage                                        =>
-                for {
-                  chat <- findById(chatHistory)(chatId)
-                  _    <- chatHistory.getAndUpdate(_.updated(chatId, chat + msg))
-                } yield msg
-            }
-          })
+        val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] =
+          findById(topics)(chatId).map {
+            case Some(topic) =>
+              topic.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap {
+                case WebSocketFrame.Text(body, _) =>
+                  Json.parse(body).as[Request].args match {
+                    // User joins for the first time
+                    case Join(u @ User, userId, _, _, None, None) => IO(Joined(u, userId, chatId, None, None))
+                    // User re-joins (browser refresh), so we load chat history
+                    case Join(User, _, _, _, Some(_), _)          =>
+                      findById(chatHistory)(chatId).map(_.fold[Out](ChatExpired(chatId))(identity))
+                    // Support joins for the first time
+                    case Join(s @ Support, userId, _, chatId, None, u @ Some(_)) =>
+                      for {
+                        supportId <- generateRandomId
+                        _         <- chatHistory.getAndUpdate(_.updated(chatId, ChatHistory(Vector.empty)))
+                      } yield Joined(s, userId, chatId, Some(supportId), u)
+                    // Support re-joins (browser refresh), so we load chat history
+                    case Join(Support, _, _, _, Some(_), Some(_))                =>
+                      findById(chatHistory)(chatId).map(_.fold[Out](ChatExpired(chatId))(identity))
+                    // chat message either from user or support
+                    case msg: ChatMessage                                        =>
+                      findById(chatHistory)(chatId).flatMap {
+                        case Some(history) =>
+                          for {
+                            _ <- chatHistory.getAndUpdate(_.updated(chatId, history + msg))
+                          } yield msg
+                        case None          => IO(ChatExpired(chatId))
+                      }
+                  }
+              })
+            case None        => (_: Stream[IO, WebSocketFrame]) => Stream.empty
+          }
 
         val lazySend: IO[Stream[IO, WebSocketFrame]] = findById(topics)(chatId).map {
-          _.subscribe(10).collect { case out: Out =>
-            WebSocketFrame.Text(Response(out).asJson)
-          }
+          case Some(topic) =>
+            topic.subscribe(10).collect { case out: Out =>
+              WebSocketFrame.Text(Response(out).asJson)
+            }
+          case None        => Stream.empty
         }
 
         val receive: Pipe[IO, WebSocketFrame, Unit] = stream => Stream.eval(lazyReceive).flatMap(_(stream))
