@@ -19,34 +19,28 @@ object Main extends IOApp.Simple {
   type ChatId = String
 
   sealed trait Message
-
   sealed trait In  extends Message
   sealed trait Out extends Message
 
   sealed trait Participant {
     override def toString: String = this.getClass.getSimpleName.init // drops dollar sign
   }
-
-  object Participant {
+  object Participant       {
     def fromString: String => Option[Participant] = PartialFunction.condOpt(_) {
       case "User"    => User
       case "Support" => Support
     }
   }
-
-  case object User    extends Participant
+  case object User extends Participant
   case object Support extends Participant
-
-  private def participantStrToJsResult: String => JsResult[Participant] =
+  private def participantToJsResult: String => JsResult[Participant] =
     Participant.fromString(_).map(JsSuccess(_)).getOrElse(JsError("incorrect `from` value"))
 
   implicit val participantFmt: Format[Participant] = new Format[Participant] {
     override def writes(o: Participant): JsValue             = JsString(o.toString)
-    override def reads(json: JsValue): JsResult[Participant] = for {
-      from <- (json \ "from").validate[String].flatMap(participantStrToJsResult)
-    } yield from
+    override def reads(json: JsValue): JsResult[Participant] =
+      (json \ "from").validate[String].flatMap(participantToJsResult)
   }
-
   final case class ChatMessage(
     userId: String,
     supportId: String,
@@ -55,8 +49,7 @@ object Main extends IOApp.Simple {
     from: Participant,
   ) extends In
       with Out
-
-  implicit val chatMsgFmt: Format[ChatMessage] = new Format[ChatMessage] {
+  implicit val chatMsgFmt: Format[ChatMessage]     = new Format[ChatMessage] {
     override def reads(json: JsValue): JsResult[ChatMessage] = for {
       userId    <- (json \ "userId").validate[String]
       supportId <- (json \ "supportId").validate[String]
@@ -73,17 +66,15 @@ object Main extends IOApp.Simple {
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends In
-
-  implicit val readsJoin: Reads[Join] = json =>
+  implicit val readsJoin: Reads[Join]              = json =>
     for {
-      from            <- (json \ "from").validate[String].flatMap(participantStrToJsResult)
+      from            <- (json \ "from").validate[String].flatMap(participantToJsResult)
       userId          <- (json \ "userId").validate[String]
       username        <- (json \ "username").validate[String]
       supportId       <- (json \ "supportId").validateOpt[String]
       supportUserName <- (json \ "supportUserName").validateOpt[String]
     } yield Join(from, userId, username, supportId, supportUserName)
-
-  implicit val writesJoin: Writes[Join] = Json.writes[Join]
+  implicit val writesJoin: Writes[Join]            = Json.writes[Join]
 
   final case class Joined(
     participant: Participant,
@@ -92,19 +83,21 @@ object Main extends IOApp.Simple {
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends Out
-
   implicit val joinedFmt: Format[Joined] = Json.format[Joined]
+
   final case class Connected(userId: String, username: String, chatId: String) extends Out
-  final case class Request(`type`: String, args: In)
-  final case class Response(args: Out)
 
   final case class ChatHistory(messages: Vector[ChatMessage]) extends Out {
     def +(msg: ChatMessage): ChatHistory = copy(messages :+ msg)
   }
 
   implicit val chatHistoryFmt: Format[ChatHistory] = Json.format[ChatHistory]
-  implicit val connectedFmt: Format[Connected]     = Json.format[Connected]
-  implicit val requestFmt: Reads[Request]          = json =>
+
+  final case class Request(`type`: String, args: In)
+  final case class Response(args: Out)
+
+  implicit val connectedFmt: Format[Connected] = Json.format[Connected]
+  implicit val requestFmt: Reads[Request]      = json =>
     for {
       typ  <- (json \ "type").validate[String]
       args <- (json \ "args").validate[JsValue]
@@ -113,37 +106,36 @@ object Main extends IOApp.Simple {
         case "ChatMessage" => chatMsgFmt.reads(args)
       }
     } yield Request(typ, in)
-  implicit val outFmt: Writes[Out]                 = {
+  implicit val outFmt: Writes[Out]             = {
     case m: ChatMessage => chatMsgFmt.writes(m)
     case c: Connected   => connectedFmt.writes(c)
     case c: ChatHistory => chatHistoryFmt.writes(c)
     case j: Joined      => joinedFmt.writes(j)
     case c: ChatExpired => chatExpiredFmt.writes(c)
   }
-  implicit val responseFmt: Writes[Response]       = response => {
+  implicit val responseFmt: Writes[Response]   = response => {
     val `type` = response.args.getClass.getSimpleName
     JsObject(Map("type" -> JsString(`type`), "args" -> outFmt.writes(response.args)))
   }
 
   final case class ChatExpired(chatId: String) extends Out
-
   implicit val chatExpiredFmt: Format[ChatExpired] = Json.format[ChatExpired]
 
   private def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
   val run = (for {
-    topics    <- Resource.eval(IO.ref(Map.empty[String, Topic[IO, Message]])) // ChatId -> Topic[IO, Message])
-    userChats <- Resource.eval(IO.ref(Map.empty[UserId, ChatId]))             // ChatId -> CustomerId
-    chatHistory <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
-    _           <- EmberServerBuilder
+    topics    <- Resource.eval(IO.ref(Map.empty[String, Topic[IO, Message]]))
+    userChats <- Resource.eval(IO.ref(Map.empty[UserId, ChatId]))
+    history   <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
+    _         <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(httpApp(_, topics, userChats, chatHistory))
+      .withHttpWebSocketApp(httpApp(_, topics, userChats, history))
       .withIdleTimeout(120.seconds)
       .build
-    _           <- (for {
-      _ <- chatHistory.getAndUpdate {
+    _         <- (for {
+      _ <- history.getAndUpdate {
         _.flatMap { case (userId, history) =>
           history.messages.lastOption.fold(Option(userId -> history)) { msg =>
             val difference = ChronoUnit.MINUTES.between(msg.timestamp, Instant.now())
@@ -154,9 +146,7 @@ object Main extends IOApp.Simple {
     } yield ()).flatMap(_ => IO.sleep(30.seconds)).foreverM.toResource
   } yield ExitCode.Success).useForever
 
-  implicit class AsJson[A: Writes](self: A) {
-    def asJson: String = Json.prettyPrint(Json.toJson(self))
-  }
+  implicit class AsJson[A: Writes](self: A) { def asJson: String = Json.prettyPrint(Json.toJson(self)) }
 
   def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] =
     cache.get.flatMap(c => IO(c.get(id)))
@@ -165,7 +155,7 @@ object Main extends IOApp.Simple {
     wsb: WebSocketBuilder2[IO],
     topics: Ref[IO, Map[ChatId, Topic[IO, Message]]],
     userChats: Ref[IO, Map[UserId, ChatId]],
-    chatHistory: Ref[IO, Map[ChatId, ChatHistory]],
+    history: Ref[IO, Map[ChatId, ChatHistory]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -190,35 +180,30 @@ object Main extends IOApp.Simple {
                     case Join(u @ User, userId, _, None, None) => IO(Joined(u, userId, chatId, None, None))
                     // User re-joins (browser refresh), so we load chat history
                     case Join(User, _, _, Some(_), _)          =>
-                      findById(chatHistory)(chatId).map(_.fold[Out](ChatExpired(chatId))(identity))
+                      findById(history)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                     // Support joins for the first time
                     case Join(s @ Support, userId, _, None, u @ Some(_)) =>
                       for {
                         supportId <- generateRandomId
-                        _         <- chatHistory.getAndUpdate(_.updated(chatId, ChatHistory(Vector.empty)))
+                        _         <- history.getAndUpdate(_.updated(chatId, ChatHistory(Vector.empty)))
                       } yield Joined(s, userId, chatId, Some(supportId), u)
                     // Support re-joins (browser refresh), so we load chat history
                     case Join(Support, _, _, Some(_), Some(_))           =>
-                      findById(chatHistory)(chatId).map(_.fold[Out](ChatExpired(chatId))(identity))
+                      findById(history)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                     // chat message either from user or support
                     case msg: ChatMessage                                =>
-                      findById(chatHistory)(chatId).flatMap {
-                        case Some(history) =>
-                          for {
-                            _ <- chatHistory.getAndUpdate(_.updated(chatId, history + msg))
-                          } yield msg
-                        case None          => IO(ChatExpired(chatId))
+                      findById(history)(chatId).flatMap {
+                        case Some(hist) => history.getAndUpdate(_.updated(chatId, hist + msg)).as(msg)
+                        case None       => IO(ChatExpired(chatId))
                       }
                   }
               })
             case None        => (_: Stream[IO, WebSocketFrame]) => Stream.empty
           }
 
-        val lazySend: IO[Stream[IO, WebSocketFrame]] = findById(topics)(chatId).map {
+        val lazySend: IO[Stream[IO, WebSocketFrame.Text]] = findById(topics)(chatId).map {
           case Some(topic) =>
-            topic.subscribe(10).collect { case out: Out =>
-              WebSocketFrame.Text(Response(out).asJson)
-            }
+            topic.subscribe(10).collect { case out: Out => WebSocketFrame.Text(Response(out).asJson) }
           case None        => Stream.empty
         }
 
