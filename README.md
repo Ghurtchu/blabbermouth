@@ -151,7 +151,7 @@ In case either `User` or `Support` refreshes browser backend either loads:
                     "supportId": "35eda9304e554514915fdbb8f26b710d",
                     "content": "Hello, please navigate to Transfer and then select Offshore :)",
                     "timestamp": "2023-10-22T18:37:10.219775Z",
-                    "from": "User"
+                    "from": "Support"
                 }
             ]
         }
