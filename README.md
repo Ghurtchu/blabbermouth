@@ -114,7 +114,7 @@
    }
    ```
    
-Each chat expires after two minutes of inactivity.
+Each chat expires after two minutes of inactivity. Also, WebSocket connection automatically closes after 120 seconds of inactivity.
 
 In case either `User` or `Support` refreshes browser backend either loads:
 - conversation history (if the chat is still active)
@@ -149,7 +149,7 @@ In case either `User` or `Support` refreshes browser backend either loads:
                 {
                     "userId": "718b568c22f6460ca46a07cfc6aae3ba",
                     "supportId": "35eda9304e554514915fdbb8f26b710d",
-                    "content": "Idk XDDD",
+                    "content": "Hello, please navigate to Transfer and then select Offshore :)",
                     "timestamp": "2023-10-22T18:37:10.219775Z",
                     "from": "User"
                 }
