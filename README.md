@@ -95,7 +95,7 @@
             "userId" : "f49f3cc665af4cb38092af714a4c87fa",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "supportUserName": "Vika",
-            "content": "hi?",
+            "content": "Hello, please navigate to Transfer and then select Offshore :)",
             "from": "Support"    
         }
     }
@@ -107,18 +107,71 @@
         "args": {
             "userId": "f49f3cc665af4cb38092af714a4c87fa",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
-             "content": "hi?",
+            "content": "Hello, please navigate to Transfer and then select Offshore :)",
             "timestamp": "2023-10-22T18:19:19.119515Z",
             "from": "Support"
         }
    }
    ```
    
-Each chat expires as soon as server knows that its last message has been written more than two minutes ago.
+Each chat expires after two minutes of inactivity.
 
-6) In case either `User` or `Support` refreshes browser backend either loads:
-- conversation history:
-- message about chat expiration
+In case either `User` or `Support` refreshes browser backend either loads:
+- conversation history (if the chat is still active)
+- message about chat expiration (if the chat was expired)
+
+6) In case `User` refreshes browser the UI must send new `Join` (re-join) WebSocket text message:
+    ```json
+    {   
+        "type": "Join",
+        "args": {
+        "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
+        "chatId": "0bbf78fa742542a5b617e60483ca1e93",
+        "supportId": "7c270542e64a4dfbb2bc1c7793746674",
+        "username": "Nika",
+        "from": "User"
+        }
+   }
+   ```
+   - Expect `JSON` response:
+    ```json
+    {
+        "type": "ChatHistory",
+        "args": {
+            "messages": [
+                {
+                    "userId": "718b568c22f6460ca46a07cfc6aae3ba",
+                    "supportId": "35eda9304e554514915fdbb8f26b710d",
+                    "content": "Hey, I want to tranasfer money offshore, how can I do it via internet bank?",
+                    "timestamp": "2023-10-22T18:36:54.834408Z",
+                    "from": "User"
+                },
+                {
+                    "userId": "718b568c22f6460ca46a07cfc6aae3ba",
+                    "supportId": "35eda9304e554514915fdbb8f26b710d",
+                    "content": "Idk XDDD",
+                    "timestamp": "2023-10-22T18:37:10.219775Z",
+                    "from": "User"
+                }
+            ]
+        }
+    }
+    ```
+   
+7) Same message is loaded for `Support`, however a bit different `Join` (re-join) WebSocket text message must be sent:
+    ```json
+    {   
+        "type": "Join",
+        "args": {
+            "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
+            "chatId": "0bbf78fa742542a5b617e60483ca1e93",
+            "supportId": "7c270542e64a4dfbb2bc1c7793746674",
+            "username": "Nika",
+            "supportUserName": "Vika",
+            "from": "Support"
+        }
+   }
+   ```
 
 
 
