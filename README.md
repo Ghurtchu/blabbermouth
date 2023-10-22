@@ -125,11 +125,11 @@ In case `User` or `Support` refreshes browser backend either loads:
     {   
         "type": "Join",
         "args": {
-        "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
-        "chatId": "0bbf78fa742542a5b617e60483ca1e93",
-        "supportId": "7c270542e64a4dfbb2bc1c7793746674",
-        "username": "Nika",
-        "from": "User"
+            "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
+            "chatId": "0bbf78fa742542a5b617e60483ca1e93",
+            "supportId": "7c270542e64a4dfbb2bc1c7793746674",
+            "username": "Nika",
+            "from": "User"
         }
    }
    ```
