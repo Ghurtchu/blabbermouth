@@ -70,7 +70,6 @@ object Main extends IOApp.Simple {
     from: Participant,
     userId: String,
     username: String,
-    chatId: String,
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends In
@@ -80,10 +79,9 @@ object Main extends IOApp.Simple {
       from            <- (json \ "from").validate[String].flatMap(participantStrToJsResult)
       userId          <- (json \ "userId").validate[String]
       username        <- (json \ "username").validate[String]
-      chatId          <- (json \ "chatId").validate[String]
       supportId       <- (json \ "supportId").validateOpt[String]
       supportUserName <- (json \ "supportUserName").validateOpt[String]
-    } yield Join(from, userId, username, chatId, supportId, supportUserName)
+    } yield Join(from, userId, username, supportId, supportUserName)
 
   implicit val writesJoin: Writes[Join] = Json.writes[Join]
 
@@ -189,21 +187,21 @@ object Main extends IOApp.Simple {
                 case WebSocketFrame.Text(body, _) =>
                   Json.parse(body).as[Request].args match {
                     // User joins for the first time
-                    case Join(u @ User, userId, _, _, None, None) => IO(Joined(u, userId, chatId, None, None))
+                    case Join(u @ User, userId, _, None, None) => IO(Joined(u, userId, chatId, None, None))
                     // User re-joins (browser refresh), so we load chat history
-                    case Join(User, _, _, _, Some(_), _)          =>
+                    case Join(User, _, _, Some(_), _)          =>
                       findById(chatHistory)(chatId).map(_.fold[Out](ChatExpired(chatId))(identity))
                     // Support joins for the first time
-                    case Join(s @ Support, userId, _, chatId, None, u @ Some(_)) =>
+                    case Join(s @ Support, userId, _, None, u @ Some(_)) =>
                       for {
                         supportId <- generateRandomId
                         _         <- chatHistory.getAndUpdate(_.updated(chatId, ChatHistory(Vector.empty)))
                       } yield Joined(s, userId, chatId, Some(supportId), u)
                     // Support re-joins (browser refresh), so we load chat history
-                    case Join(Support, _, _, _, Some(_), Some(_))                =>
+                    case Join(Support, _, _, Some(_), Some(_))           =>
                       findById(chatHistory)(chatId).map(_.fold[Out](ChatExpired(chatId))(identity))
                     // chat message either from user or support
-                    case msg: ChatMessage                                        =>
+                    case msg: ChatMessage                                =>
                       findById(chatHistory)(chatId).flatMap {
                         case Some(history) =>
                           for {
