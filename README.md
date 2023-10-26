@@ -1,5 +1,12 @@
 # Live Support Chat Server
 
+Service oriented architecture with two backends:
+- ChatServer:
+  - publishes messages to `Redis pub/sub`
+  - enables user and support to exchange messages via chat using `WebSockets`
+- Subscriber:
+  - subscribes to `Redis pub/sub` and forwards new `Join` requests to UI using `Server Sent Events`
+
 **Protocol and flow description for building UI**:
 
 1) Register `User` in server by sending HTTP request to: `GET localhost:9000/user/join/{userName}`
