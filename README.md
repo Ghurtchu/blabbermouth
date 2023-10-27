@@ -25,7 +25,6 @@ Service oriented architecture with two backends:
         "type": "Join",
         "args": {
             "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
-            "chatId": "0bbf78fa742542a5b617e60483ca1e93",
             "username": "Nika",
             "from": "User"
         }
@@ -37,8 +36,7 @@ Service oriented architecture with two backends:
        "type": "Joined",
        "args": {
            "participant": "User",
-           "userId": "f49f3cc665af4cb38092af714a4c87fa",
-           "chatId": "009cf42388504040a297df6a11e9c801"
+           "userId": "f49f3cc665af4cb38092af714a4c87fa"
         }
     }
     ```
@@ -72,7 +70,6 @@ Service oriented architecture with two backends:
         "args": {
             "participant": "Support",
             "userId": "f49f3cc665af4cb38092af714a4c87fa",
-            "chatId": "009cf42388504040a297df6a11e9c801",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "supportUserName": "Vika"
           }
@@ -142,7 +139,6 @@ In case `User` or `Support` refreshes browser backend either loads:
         "type": "Join",
         "args": {
             "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
-            "chatId": "0bbf78fa742542a5b617e60483ca1e93",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "username": "Nika",
             "from": "User"
@@ -180,7 +176,6 @@ In case `User` or `Support` refreshes browser backend either loads:
         "type": "Join",
         "args": {
             "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
-            "chatId": "0bbf78fa742542a5b617e60483ca1e93",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "username": "Nika",
             "supportUserName": "Vika",
