@@ -5,7 +5,7 @@ Service oriented architecture with two backends:
   - publishes messages to `Join` channel in `Redis pub/sub`
   - enables `User` and `Support` to exchange messages via chat using `WebSockets`
 - `Subscriber`:
-  - subscribes to `Join` channel in `Redis pub/sub` and forwards messages to UI using `Server Sent Events`
+  - subscribes to `Join` channel in `Redis pub/sub` and forwards messages to UI using `WebSockets`
 
 **Protocol and flow description for building UI**:
 
