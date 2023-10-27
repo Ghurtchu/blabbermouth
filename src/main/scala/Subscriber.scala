@@ -8,7 +8,6 @@ import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import fs2.Stream
 import fs2.concurrent.Topic
 import org.http4s.Method.GET
-import org.http4s.dsl.io.Root
 import org.http4s.dsl.io._
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
@@ -18,8 +17,6 @@ import org.http4s.HttpRoutes
 /** subscribes to Redis pub/sub and forwards messages to UI via WebSockets
   */
 object Subscriber extends IOApp.Simple {
-
-  private type RedisStream = Stream[IO, String]
 
   override val run = (for {
     flow <- Resource.eval(Topic[IO, String])
@@ -36,7 +33,7 @@ object Subscriber extends IOApp.Simple {
 
   } yield ()).useForever
   def webSocketApp(
-    redisStream: RedisStream,
+    redisStream: Stream[IO, String],
     flow: Topic[IO, String],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =

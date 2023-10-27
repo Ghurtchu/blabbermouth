@@ -157,7 +157,7 @@ object ChatServer extends IOApp.Simple {
     wsb: WebSocketBuilder2[IO],
     chatTopics: Ref[IO, Map[ChatId, ChatTopic]],
     chatHistory: Ref[IO, Map[ChatId, ChatHistory]],
-    publishStream: Stream[IO, String] => Stream[IO, Unit],
+    redisStream: Stream[IO, String] => Stream[IO, Unit],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -181,7 +181,7 @@ object ChatServer extends IOApp.Simple {
                   case Join(u @ User, userId, _, None, None) =>
                     for {
                       joined <- IO(Joined(u, userId, None, None))
-                      _ <- Stream.emit(joined.asJson).through(publishStream).compile.foldMonoid
+                      _ <- Stream.emit(joined.asJson).through(redisStream).compile.foldMonoid
                     } yield joined
                   // User re-joins (browser refresh), so we load chat history
                   case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
