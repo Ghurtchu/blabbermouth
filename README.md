@@ -2,14 +2,14 @@
 
 Service oriented architecture with two backends:
 - `ChatServer`:
-  - publishes messages to `Join` channel in `Redis pub/sub`
+  - publishes user join request messages to `Join` channel in `Redis pub/sub`
   - enables `User` and `Support` to exchange messages via chat using `WebSockets`
 - `Subscriber`:
   - subscribes to `Join` channel in `Redis pub/sub` and forwards & filters messages to UI using `WebSockets`
 
 **Protocol and flow description for building UI**:
 
-1) Register `User` in server by sending HTTP request to: `GET localhost:9000/user/join/{userName}`
+1) Register `User` in `ChatServer` by sending HTTP request to: `GET localhost:9000/user/join/{userName}`
    - Expect `JSON` response:
     ```json
     {
@@ -18,9 +18,8 @@ Service oriented architecture with two backends:
         "chatId": "d2464b5386044daf9e36ffd414260f67"
     }
     ```
-2) Initiate WebSocket connection for `User` by sending request to: `GET localhost:9000/chat/{chatId}`
+2) Initiate WebSocket connection for `User` in `ChatServer` by sending request to: `GET localhost:9000/chat/{chatId}`
    - attach request body:
-
     ```json
     {
         "type": "Join",
@@ -43,7 +42,17 @@ Service oriented architecture with two backends:
         }
     }
     ```
-3) Initiate WebSocket connection for `Support` by sending request to: `GET localhost:9000/chat/{chatId}`
+3) Initiate WebSocket connection for `Support` in `Subscriber` by sending request to: `GET localhost:9001/joins`
+   - Expect `JSON` WebSocket messages:
+     ```json
+     {
+         "participant": "User",
+         "userId": "...",
+         "chatId": "..."
+     }
+     ```
+   - once `Support` clicks to the special user request UI must send the `userId` as websocket message so that it gets filtered out for other `Support` agents
+4) Initiate WebSocket connection for `Support` in `ChatServer` by sending request to: `GET localhost:9000/chat/{chatId}`
    - attach request body:
     ```json
     {
@@ -69,7 +78,7 @@ Service oriented architecture with two backends:
           }
     }
     ```
-4) Send chat message to `Support` from `User` by sending the following WebSocket text message on the opened WS connection:
+5) Send chat message to `Support` from `User` by sending the following WebSocket text message on the opened WS connection:
     ```json
     {
         "type": "ChatMessage",
@@ -94,7 +103,7 @@ Service oriented architecture with two backends:
         }
     }
    ```
-5) Send chat message to `User` from `Support` by sending the following WebSocket text message on the opened WS connection:  
+6) Send chat message to `User` from `Support` by sending the following WebSocket text message on the opened WS connection:  
     ```json
     {
         "type": "ChatMessage",
@@ -127,7 +136,7 @@ In case `User` or `Support` refreshes browser backend either loads:
 - conversation history (if the chat is still active)
 - message about chat expiration (if the chat was expired)
 
-6) In case `User` refreshes browser the UI must send new `Join` (re-join) WebSocket text message:
+7) In case `User` refreshes browser the UI must send new `Join` (re-join) WebSocket text message:
     ```json
     {   
         "type": "Join",
@@ -165,7 +174,7 @@ In case `User` or `Support` refreshes browser backend either loads:
     }
     ```
    
-7) Same message is loaded for `Support`, however a bit different `Join` (re-join) WebSocket text message must be sent:
+8) Same message is loaded for `Support`, however a bit different `Join` (re-join) WebSocket text message must be sent:
     ```json
     {   
         "type": "Join",
