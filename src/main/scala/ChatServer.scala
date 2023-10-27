@@ -175,7 +175,7 @@ object ChatServer extends IOApp.Simple {
                   // User joins for the first time
                   case Join(u @ User, userId, _, None, None) =>
                     for {
-                      joined <- IO(Joined(u, userId, chatId, None, None))
+                      joined <- IO(Joined(u, userId, None, None))
                       _ <- Stream.emit(joined.asJson).through(publishStream).compile.foldMonoid
                     } yield joined
                   // User re-joins (browser refresh), so we load chat history
@@ -185,7 +185,7 @@ object ChatServer extends IOApp.Simple {
                     for {
                       supportId <- generateRandomId
                       _ <- history.getAndUpdate(_.updated(chatId, ChatHistory.init(chatId)))
-                    } yield Joined(s, userId, chatId, Some(supportId), u)
+                    } yield Joined(s, userId, Some(supportId), u)
                   // Support re-joins (browser refresh), so we load chat history
                   case Join(Support, _, _, Some(_), Some(_)) => findById(history)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // chat message either from user or support
