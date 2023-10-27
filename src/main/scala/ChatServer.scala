@@ -1,3 +1,4 @@
+import ChatServer.Participant
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.connection.RedisClient
@@ -12,6 +13,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
+import Participant._
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -24,22 +26,32 @@ object ChatServer extends IOApp.Simple {
 
   type UserId = String
   type ChatId = String
+  type ChatChannel = Topic[IO, Message]
 
   sealed trait Message
   sealed trait In extends Message
   sealed trait Out extends Message
+  implicit val outFmt: Writes[Out] = {
+    case m: ChatMessage => chatMsgFmt.writes(m)
+    case c: Registered  => writesRegistered.writes(c)
+    case c: ChatHistory => writesChatHistory.writes(c)
+    case j: Joined      => writesJoined.writes(j)
+    case c: ChatExpired => writesChatExpired.writes(c)
+  }
 
   sealed trait Participant {
     override def toString: String = this.getClass.getSimpleName.init // drops dollar sign
   }
   object Participant {
+
+    case object User extends Participant
+    case object Support extends Participant
+
     def fromString: String => Option[Participant] = PartialFunction.condOpt(_) {
       case "User"    => User
       case "Support" => Support
     }
   }
-  case object User extends Participant
-  case object Support extends Participant
   private def participantToJsResult: String => JsResult[Participant] =
     Participant.fromString(_).map(JsSuccess(_)).getOrElse(JsError("incorrect `from` value"))
 
@@ -48,23 +60,8 @@ object ChatServer extends IOApp.Simple {
     override def reads(json: JsValue): JsResult[Participant] =
       (json \ "from").validate[String].flatMap(participantToJsResult)
   }
-  final case class ChatMessage(
-    userId: String,
-    supportId: String,
-    content: String,
-    timestamp: Instant,
-    from: Participant,
-  ) extends In
-      with Out
-  implicit val chatMsgFmt: Format[ChatMessage] = new Format[ChatMessage] {
-    override def reads(json: JsValue): JsResult[ChatMessage] = for {
-      userId <- (json \ "userId").validate[String]
-      supportId <- (json \ "supportId").validate[String]
-      content <- (json \ "content").validate[String]
-      from <- participantFmt.reads(json)
-    } yield ChatMessage(userId, supportId, content, Instant.now(), from)
-    override def writes(o: ChatMessage): JsValue = Json.writes[ChatMessage].writes(o)
-  }
+  final case class ChatMessage(content: String, from: Participant, timestamp: Option[Instant] = None) extends In with Out
+  implicit val chatMsgFmt: Format[ChatMessage] = Json.using[Json.WithDefaultValues].format[ChatMessage]
 
   final case class Join(
     from: Participant,
@@ -73,39 +70,28 @@ object ChatServer extends IOApp.Simple {
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends In
-  implicit val readsJoin: Reads[Join] = json =>
-    for {
-      from <- (json \ "from").validate[String].flatMap(participantToJsResult)
-      userId <- (json \ "userId").validate[String]
-      username <- (json \ "username").validate[String]
-      supportId <- (json \ "supportId").validateOpt[String]
-      supportUserName <- (json \ "supportUserName").validateOpt[String]
-    } yield Join(from, userId, username, supportId, supportUserName)
-  implicit val writesJoin: Writes[Join] = Json.writes[Join]
+  implicit val readsJoin: Reads[Join] = Json.reads[Join]
 
   final case class Joined(
     participant: Participant,
     userId: String,
-    chatId: String,
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends Out
-  implicit val joinedFmt: Format[Joined] = Json.format[Joined]
+  implicit val writesJoined: Writes[Joined] = Json.writes[Joined]
 
-  final case class Connected(userId: String, username: String, chatId: String) extends Out
+  final case class Registered(userId: String, username: String, chatId: String) extends Out
+  implicit val writesRegistered: Writes[Registered] = Json.writes[Registered]
 
-  final case class ChatHistory(messages: Vector[ChatMessage]) extends Out {
-    def +(msg: ChatMessage): ChatHistory = copy(messages :+ msg)
+  final case class ChatHistory(chatId: String, messages: Vector[ChatMessage]) extends Out {
+    def +(msg: ChatMessage): ChatHistory = copy(messages = messages :+ msg)
+  }
+  implicit val writesChatHistory: Writes[ChatHistory] = Json.writes[ChatHistory]
+  object ChatHistory {
+    def init(chatId: String): ChatHistory = new ChatHistory(chatId, Vector.empty)
   }
 
-  object ChatHistory { def initialize: ChatHistory = new ChatHistory(Vector.empty) }
-
-  implicit val chatHistoryFmt: Format[ChatHistory] = Json.format[ChatHistory]
-
   final case class Request(`type`: String, args: In)
-  final case class Response(args: Out)
-
-  implicit val connectedFmt: Format[Connected] = Json.format[Connected]
   implicit val requestFmt: Reads[Request] = json =>
     for {
       typ <- (json \ "type").validate[String]
@@ -115,47 +101,43 @@ object ChatServer extends IOApp.Simple {
         case "ChatMessage" => chatMsgFmt.reads(args)
       }
     } yield Request(typ, in)
-  implicit val outFmt: Writes[Out] = {
-    case m: ChatMessage => chatMsgFmt.writes(m)
-    case c: Connected   => connectedFmt.writes(c)
-    case c: ChatHistory => chatHistoryFmt.writes(c)
-    case j: Joined      => joinedFmt.writes(j)
-    case c: ChatExpired => chatExpiredFmt.writes(c)
-  }
-  implicit val responseFmt: Writes[Response] = response => {
+
+  final case class Response(args: Out)
+  implicit val writesResponse: Writes[Response] = response => {
     val `type` = response.args.getClass.getSimpleName
     JsObject(Map("type" -> JsString(`type`), "args" -> outFmt.writes(response.args)))
   }
 
   final case class ChatExpired(chatId: String) extends Out
-  implicit val chatExpiredFmt: Format[ChatExpired] = Json.format[ChatExpired]
+  implicit val writesChatExpired: Writes[ChatExpired] = Json.writes[ChatExpired]
 
   private def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
-  val redisChannel: RedisChannel[String] = RedisChannel("joins")
-  private val stringCodec = RedisCodec.Utf8
-
   val run = (for {
-    redisClient <- RedisClient[IO].from("redis://localhost")
-    pubSub <- PubSub.mkPubSubConnection[IO, String, String](redisClient, stringCodec)
-    pubSubStream = pubSub.publish(redisChannel)
-    topics <- Resource.eval(IO.ref(Map.empty[String, Topic[IO, Message]]))
-    userChats <- Resource.eval(IO.ref(Map.empty[UserId, ChatId]))
+    redisStream <- RedisClient[IO]
+      .from("redis://localhost")
+      .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
+    chatChannels <- Resource.eval(IO.ref(Map.empty[ChatId, ChatChannel]))
+    chats <- Resource.eval(IO.ref(Map.empty[UserId, ChatId]))
     history <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, topics, userChats, history, pubSubStream))
+      .withHttpWebSocketApp(webSocketApp(_, chatChannels, chats, history, redisStream))
       .withIdleTimeout(120.seconds)
       .build
     _ <- (for {
+      now <- IO.realTimeInstant
       _ <- history.getAndUpdate {
         _.flatMap { case (userId, history) =>
-          history.messages.lastOption.fold(Option(userId -> history)) { msg =>
-            val difference = ChronoUnit.MINUTES.between(msg.timestamp, Instant.now())
-            Option.when(difference < 2)(userId -> history)
-          }
+          history.messages.lastOption
+            .fold(Option(userId -> history)) {
+              _.timestamp.flatMap { msgTimestamp =>
+                val diffInMinutes = ChronoUnit.MINUTES.between(msgTimestamp, now)
+                Option.when(diffInMinutes < 2)(userId -> history)
+              }
+            }
         }
       }
     } yield ()).flatMap(_ => IO.sleep(30.seconds)).foreverM.toResource
@@ -163,9 +145,7 @@ object ChatServer extends IOApp.Simple {
 
   implicit class AsJson[A: Writes](self: A) { def asJson: String = Json.prettyPrint(Json.toJson(self)) }
   implicit class AsWebSocketText(self: String) { def asText: WebSocketFrame.Text = WebSocketFrame.Text(self) }
-
-  def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] =
-    cache.get.flatMap(c => IO(c.get(id)))
+  def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get.flatMap(c => IO(c.get(id)))
 
   private def webSocketApp(
     wsb: WebSocketBuilder2[IO],
@@ -183,7 +163,7 @@ object ChatServer extends IOApp.Simple {
             _ <- userChats.getAndUpdate(_.updated(userId, chatId))
             topic <- Topic[IO, Message]
             _ <- topics.getAndUpdate(_.updated(chatId, topic))
-            response <- Ok(Connected(userId, username, chatId).asJson)
+            response <- Ok(Registered(userId, username, chatId).asJson)
           } yield response
         }
       case GET -> Root / "chat" / chatId =>
@@ -204,7 +184,7 @@ object ChatServer extends IOApp.Simple {
                   case Join(s @ Support, userId, _, None, u @ Some(_)) =>
                     for {
                       supportId <- generateRandomId
-                      _ <- history.getAndUpdate(_.updated(chatId, ChatHistory.initialize))
+                      _ <- history.getAndUpdate(_.updated(chatId, ChatHistory.init(chatId)))
                     } yield Joined(s, userId, chatId, Some(supportId), u)
                   // Support re-joins (browser refresh), so we load chat history
                   case Join(Support, _, _, Some(_), Some(_)) => findById(history)(chatId).map(_.getOrElse(ChatExpired(chatId)))

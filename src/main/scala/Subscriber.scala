@@ -1,3 +1,4 @@
+import ChatServer.AsWebSocketText
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.connection.RedisClient
@@ -18,29 +19,33 @@ import org.http4s.HttpRoutes
   */
 object Subscriber extends IOApp.Simple {
 
+  private type RedisStream = Stream[IO, String]
+
   override val run = (for {
-    topic <- Resource.eval(Topic[IO, String])
-    redisClient <- RedisClient[IO].from("redis://localhost")
-    pubSub <- PubSub.mkPubSubConnection[IO, String, String](redisClient, RedisCodec.Utf8)
+    flow <- Resource.eval(Topic[IO, String])
+    redisPubSubConnection <- RedisClient[IO]
+      .from("redis://localhost")
+      .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
+    redisStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9001")
-      .withHttpWebSocketApp(webSocketApp(pubSub.subscribe(RedisChannel("joins")), topic, _).orNotFound)
+      .withHttpWebSocketApp(webSocketApp(redisStream, flow, _).orNotFound)
       .build
 
   } yield ()).useForever
   def webSocketApp(
-    redisStream: Stream[IO, String],
-    topic: Topic[IO, String],
+    redisStream: RedisStream,
+    flow: Topic[IO, String],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =
     HttpRoutes.of[IO] { case GET -> Root / "joins" =>
       wsb.build(
-        send = topic
+        send = flow
           .subscribe(10)
-          .flatMap(userId => redisStream.filter(_ != userId).map(WebSocketFrame.Text(_))),
-        receive = topic.publish
+          .flatMap(userId => redisStream.filter(_ != userId).map(_.asText)),
+        receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(userId, _) => userId }),
       )
     }
