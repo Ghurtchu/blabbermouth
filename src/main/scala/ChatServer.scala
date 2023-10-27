@@ -60,7 +60,9 @@ object ChatServer extends IOApp.Simple {
     override def reads(json: JsValue): JsResult[Participant] =
       (json \ "from").validate[String].flatMap(participantToJsResult)
   }
-  final case class ChatMessage(content: String, from: Participant, timestamp: Option[Instant] = None) extends In with Out
+  final case class ChatMessage(content: String, from: Participant, userId: String, supportId: String, timestamp: Option[Instant] = None)
+      extends In
+      with Out
   implicit val chatMsgFmt: Format[ChatMessage] = Json.using[Json.WithDefaultValues].format[ChatMessage]
 
   final case class Join(
