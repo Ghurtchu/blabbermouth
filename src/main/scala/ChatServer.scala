@@ -26,7 +26,7 @@ object ChatServer extends IOApp.Simple {
 
   type UserId = String
   type ChatId = String
-  type ChatChannel = Topic[IO, Message]
+  type ChatTopic = Topic[IO, Message]
 
   sealed trait Message
   sealed trait In extends Message
@@ -43,10 +43,8 @@ object ChatServer extends IOApp.Simple {
     override def toString: String = this.getClass.getSimpleName.init // drops dollar sign
   }
   object Participant {
-
     case object User extends Participant
     case object Support extends Participant
-
     def fromString: String => Option[Participant] = PartialFunction.condOpt(_) {
       case "User"    => User
       case "Support" => Support
@@ -60,8 +58,14 @@ object ChatServer extends IOApp.Simple {
     override def reads(json: JsValue): JsResult[Participant] =
       (json \ "from").validate[String].flatMap(participantToJsResult)
   }
-  final case class ChatMessage(content: String, from: Participant, userId: String, supportId: String, timestamp: Option[Instant] = None)
-      extends In
+
+  final case class ChatMessage(
+    content: String,
+    from: Participant,
+    userId: String,
+    supportId: String,
+    timestamp: Option[Instant] = None,
+  ) extends In
       with Out
   implicit val chatMsgFmt: Format[ChatMessage] = Json.using[Json.WithDefaultValues].format[ChatMessage]
 
@@ -101,6 +105,7 @@ object ChatServer extends IOApp.Simple {
       in <- typ match {
         case "Join"        => readsJoin.reads(args)
         case "ChatMessage" => chatMsgFmt.reads(args)
+        case _             => JsError("unrecognized type")
       }
     } yield Request(typ, in)
 
@@ -119,19 +124,18 @@ object ChatServer extends IOApp.Simple {
     redisStream <- RedisClient[IO]
       .from("redis://localhost")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
-    chatChannels <- Resource.eval(IO.ref(Map.empty[ChatId, ChatChannel]))
-    chats <- Resource.eval(IO.ref(Map.empty[UserId, ChatId]))
-    history <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
+    chatTopics <- Resource.eval(IO.ref(Map.empty[ChatId, ChatTopic]))
+    chatHistory <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, chatChannels, chats, history, redisStream))
+      .withHttpWebSocketApp(webSocketApp(_, chatTopics, chatHistory, redisStream))
       .withIdleTimeout(120.seconds)
       .build
     _ <- (for {
       now <- IO.realTimeInstant
-      _ <- history.getAndUpdate {
+      _ <- chatHistory.getAndUpdate {
         _.flatMap { case (userId, history) =>
           history.messages.lastOption
             .fold(Option(userId -> history)) {
@@ -151,9 +155,8 @@ object ChatServer extends IOApp.Simple {
 
   private def webSocketApp(
     wsb: WebSocketBuilder2[IO],
-    topics: Ref[IO, Map[ChatId, Topic[IO, Message]]],
-    userChats: Ref[IO, Map[UserId, ChatId]],
-    history: Ref[IO, Map[ChatId, ChatHistory]],
+    chatTopics: Ref[IO, Map[ChatId, ChatTopic]],
+    chatHistory: Ref[IO, Map[ChatId, ChatHistory]],
     publishStream: Stream[IO, String] => Stream[IO, Unit],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
@@ -162,17 +165,17 @@ object ChatServer extends IOApp.Simple {
       case GET -> Root / "user" / "join" / username =>
         IO.both(generateRandomId, generateRandomId).flatMap { case (userId, chatId) =>
           for {
-            _ <- userChats.getAndUpdate(_.updated(userId, chatId))
-            topic <- Topic[IO, Message]
-            _ <- topics.getAndUpdate(_.updated(chatId, topic))
+            _ <- chatHistory.getAndUpdate(_.updated(userId, ChatHistory.init(chatId)))
+            chatTopic <- Topic[IO, Message]
+            _ <- chatTopics.getAndUpdate(_.updated(chatId, chatTopic))
             response <- Ok(Registered(userId, username, chatId).asJson)
           } yield response
         }
       case GET -> Root / "chat" / chatId =>
         val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] =
-          findById(topics)(chatId).map {
-            case Some(t) =>
-              t.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
+          findById(chatTopics)(chatId).map {
+            case Some(chat) =>
+              chat.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
                 Json.parse(body).as[Request].args match {
                   // User joins for the first time
                   case Join(u @ User, userId, _, None, None) =>
@@ -181,19 +184,15 @@ object ChatServer extends IOApp.Simple {
                       _ <- Stream.emit(joined.asJson).through(publishStream).compile.foldMonoid
                     } yield joined
                   // User re-joins (browser refresh), so we load chat history
-                  case Join(User, _, _, Some(_), _) => findById(history)(chatId).map(_.getOrElse(ChatExpired(chatId)))
+                  case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // Support joins for the first time
-                  case Join(s @ Support, userId, _, None, u @ Some(_)) =>
-                    for {
-                      supportId <- generateRandomId
-                      _ <- history.getAndUpdate(_.updated(chatId, ChatHistory.init(chatId)))
-                    } yield Joined(s, userId, Some(supportId), u)
+                  case Join(s @ Support, userId, _, None, u @ Some(_)) => generateRandomId.map(id => Joined(s, userId, Some(id), u))
                   // Support re-joins (browser refresh), so we load chat history
-                  case Join(Support, _, _, Some(_), Some(_)) => findById(history)(chatId).map(_.getOrElse(ChatExpired(chatId)))
+                  case Join(Support, _, _, Some(_), Some(_)) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // chat message either from user or support
                   case msg: ChatMessage =>
-                    findById(history)(chatId).flatMap {
-                      case Some(hist) => history.getAndUpdate(_.updated(chatId, hist + msg)).as(msg)
+                    findById(chatHistory)(chatId).flatMap {
+                      case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msg)).as(msg)
                       case None       => IO(ChatExpired(chatId))
                     }
                 }
@@ -201,9 +200,9 @@ object ChatServer extends IOApp.Simple {
             case _ => (_: Stream[IO, WebSocketFrame]) => Stream.empty
           }
 
-        val lazySend: IO[Stream[IO, WebSocketFrame.Text]] = findById(topics)(chatId).map {
-          case Some(t) => t.subscribe(10).collect { case o: Out => Response(o).asJson.asText }
-          case _       => Stream.empty
+        val lazySend: IO[Stream[IO, WebSocketFrame.Text]] = findById(chatTopics)(chatId).map {
+          case Some(chat) => chat.subscribe(10).collect { case o: Out => Response(o).asJson.asText }
+          case _          => Stream.empty
         }
 
         val receive: Pipe[IO, WebSocketFrame, Unit] = stream => Stream.eval(lazyReceive).flatMap(_(stream))
