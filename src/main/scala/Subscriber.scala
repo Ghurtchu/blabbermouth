@@ -1,11 +1,12 @@
-import ChatServer.{JsonSyntax, WebSocketTextSyntax}
+import ChatServer.{JsonSyntax, WebSocketTextSyntax, redisResource}
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import fs2.Stream
+import dev.profunktor.redis4cats.effects.{RangeLimit, Score, ScoreWithValue, ZRange}
+import fs2.{Pure, Stream}
 import fs2.concurrent.Topic
 import org.http4s.Method.GET
 import org.http4s.dsl.io._
@@ -64,8 +65,18 @@ object Subscriber extends IOApp.Simple {
         send = flow
           .subscribe(10)
           .flatMap {
-            case ju: JoinUser => Stream.eval(IO.pure(ju.asJson.asText))
-            case Subscribe    => redisStream.map(_.asText)
+            case ju: JoinUser =>
+              val json = s"""{"username":"${ju.username}","userId":"${ju.userId}"}"""
+              Stream.emit(json.asText)
+            case Subscribe =>
+              val emits: IO[Stream[IO, WebSocketFrame.Text]] = (for {
+                users <- redisResource
+                  .use(_.zRangeByScore[Int]("users", ZRange(0, 0), Some(RangeLimit(1, 10))))
+                  .map(_.map(WebSocketFrame.Text(_)))
+                  .flatTap(IO.println)
+              } yield users).map(Stream.emits(_))
+
+              Stream.eval(emits).flatMap(identity) concurrently redisStream.map(WebSocketFrame.Text(_))
           },
         receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
