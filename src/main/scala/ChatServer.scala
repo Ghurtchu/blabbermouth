@@ -5,6 +5,8 @@ import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import fs2.{Pipe, Stream}
 import fs2.concurrent.Topic
+import cats.syntax.all._
+import cats.instances.all._
 import org.http4s.dsl.Http4sDsl
 import org.http4s.{HttpApp, HttpRoutes}
 import org.http4s.ember.server.EmberServerBuilder
@@ -12,7 +14,10 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
+import dev.profunktor.redis4cats.streams.data.XAddMessage
+import dev.profunktor.redis4cats.streams.{RedisStream, Streaming, data}
 
+import java.nio.channels.ClosedChannelException
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import scala.concurrent.duration.DurationInt
@@ -116,8 +121,22 @@ object ChatServer extends IOApp.Simple {
 
   private def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
+  val lazyRedisStream: Stream[IO, Stream[IO, XAddMessage[String, String]] => Stream[IO, data.MessageId]] = for {
+    client: RedisClient <- Stream.resource[IO, RedisClient](RedisClient[IO].from("redis://localhost"))
+    streaming <- RedisStream.mkStreamingConnection[IO, String, String](client, RedisCodec.Utf8)
+    appender = streaming.append
+  } yield appender
+
+  val redisStream: Stream[IO, XAddMessage[String, String]] => Stream[IO, data.MessageId] =
+    (inputStream: Stream[IO, XAddMessage[String, String]]) =>
+      inputStream.flatMap { xAddMessage =>
+        lazyRedisStream.evalMap { f =>
+          f(Stream.emit(xAddMessage)).compile.lastOrError
+        }
+      }
+
   val run = (for {
-    redisStream <- RedisClient[IO]
+    redisPubSub <- RedisClient[IO]
       .from("redis://localhost")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
     chatTopics <- Resource.eval(IO.ref(Map.empty[ChatId, ChatTopic]))
@@ -126,7 +145,7 @@ object ChatServer extends IOApp.Simple {
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, chatTopics, chatHistory, redisStream))
+      .withHttpWebSocketApp(webSocketApp(_, chatTopics, chatHistory, redisPubSub, redisStream))
       .withIdleTimeout(120.seconds)
       .build
     _ <- (for {
@@ -153,7 +172,8 @@ object ChatServer extends IOApp.Simple {
     wsb: WebSocketBuilder2[IO],
     chatTopics: Ref[IO, Map[ChatId, ChatTopic]],
     chatHistory: Ref[IO, Map[ChatId, ChatHistory]],
-    redisStream: Stream[IO, String] => Stream[IO, Unit],
+    redisPubSub: Stream[IO, String] => Stream[IO, Unit],
+    redisStream: Stream[IO, XAddMessage[String, String]] => Stream[IO, data.MessageId],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -171,28 +191,40 @@ object ChatServer extends IOApp.Simple {
         val lazyReceive: IO[Pipe[IO, WebSocketFrame, Unit]] =
           findById(chatTopics)(chatId).map {
             case Some(chat) =>
-              chat.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
-                println(scala.util.Try(Json.parse(body).as[Request]))
-                Json.parse(body).as[Request].args match {
-                  // User joins for the first time
-                  case Join(u @ User, userId, _, None, None) =>
-                    for {
-                      joined <- IO.pure(Joined(u, userId, Some("Waiting"), None, None))
-                      _ <- Stream.emit(joined.asJson).through(redisStream).compile.foldMonoid
-                    } yield joined
-                  // User re-joins (browser refresh), so we load chat history
-                  case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
-                  // Support joins for the first time
-                  case Join(s @ Support, userId, _, None, u @ Some(_)) => generateRandomId.map(id => Joined(s, userId, Some(id), None, u))
-                  // Support re-joins (browser refresh), so we load chat history
-                  case Join(Support, _, _, Some(_), Some(_)) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
-                  // chat message either from user or support
-                  case msg: ChatMessage =>
-                    findById(chatHistory)(chatId).flatMap {
-                      case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msg)).as(msg)
-                      case None       => IO(ChatExpired(chatId))
-                    }
-                }
+              chat.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap {
+                case WebSocketFrame.Close(_) => ???
+                case WebSocketFrame.Text(body, _) =>
+                  println(scala.util.Try(Json.parse(body).as[Request]))
+                  Json.parse(body).as[Request].args match {
+                    // User joins for the first time
+                    case Join(u @ User, userId, _, None, None) =>
+                      for {
+                        joined <- IO.pure(Joined(u, userId, Some("Waiting"), None, None))
+                        _ <- Stream
+                          .eval[IO, XAddMessage[String, String]] {
+                            val js = Json.toJson(joined)
+
+                            val map = Map("participant" -> "User", "userId" -> userId)
+                            IO.delay(XAddMessage("joins", map))
+                          }
+                          .through(redisStream)
+                          .compile
+                          .drain
+                        // _ <- Stream.emit(joined.asJson).through(redisPubSub).compile.foldMonoid
+                      } yield joined
+                    // User re-joins (browser refresh), so we load chat history
+                    case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
+                    // Support joins for the first time
+                    case Join(s @ Support, userId, _, None, u @ Some(_)) => generateRandomId.map(id => Joined(s, userId, Some(id), None, u))
+                    // Support re-joins (browser refresh), so we load chat history
+                    case Join(Support, _, _, Some(_), Some(_)) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
+                    // chat message either from user or support
+                    case msg: ChatMessage =>
+                      findById(chatHistory)(chatId).flatMap {
+                        case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msg)).as(msg)
+                        case None       => IO(ChatExpired(chatId))
+                      }
+                  }
               })
             case _ => (_: Stream[IO, WebSocketFrame]) => Stream.empty
           }
@@ -205,7 +237,7 @@ object ChatServer extends IOApp.Simple {
         val receive: Pipe[IO, WebSocketFrame, Unit] = stream => Stream.eval(lazyReceive).flatMap(_(stream))
         val send: Stream[IO, WebSocketFrame] = Stream.eval(lazySend).flatten
 
-        wsb.build(send, receive)
+        wsb.build(send, receive).
     }
   }.orNotFound
 }
