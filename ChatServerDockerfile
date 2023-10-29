@@ -5,7 +5,7 @@ FROM openjdk:17-jdk-slim
 WORKDIR /app
 
 # Copy the JAR file from the local file system to the container's working directory
-COPY chatserver.jar /app/chatserver.jar
+COPY chatserver/targer/scala-2.13/chatserver.jar /app/chatserver.jar
 
 # Command to run the JAR file
 CMD ["java", "-jar", "chatserver.jar"]

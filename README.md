@@ -13,7 +13,8 @@ Requirements for running the whole project:
 Instructions:
 - clone the repo
 - cd into repo
-- run: `docker-compose up`
+- start docker engine
+- run: `docker-compose up` (it starts `ChatServer`, `Subscriber` and `Redis` in three different docker containers which are connected via docker network)
 
 **Protocol and flow description for building UI**:
 

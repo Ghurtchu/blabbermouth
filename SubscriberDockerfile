@@ -5,7 +5,7 @@ FROM openjdk:17-jdk-slim
 WORKDIR /app
 
 # Copy the JAR file from the local file system to the container's working directory
-COPY subscriber.jar /app/subscriber.jar
+COPY subscriber/target/scala-2.13/subscriber.jar /app/subscriber.jar
 
 # Command to run the JAR file
 CMD ["java", "-jar", "subscriber.jar"]
