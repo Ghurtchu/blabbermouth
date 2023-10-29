@@ -7,7 +7,7 @@ import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import dev.profunktor.redis4cats.effects.{RangeLimit, Score, ScoreWithValue, ZRange}
 import fs2.{Pure, Stream}
-import fs2.concurrent.Topic
+import fs2.concurrent.{SignallingRef, Topic}
 import org.http4s.Method.GET
 import org.http4s.dsl.io._
 import org.http4s.ember.server.EmberServerBuilder
@@ -25,6 +25,7 @@ object Subscriber extends IOApp.Simple {
 
   sealed trait Message
 
+  case object Load extends Message
   case object Subscribe extends Message
   case class JoinUser(userId: String, username: String) extends Message
   implicit val joinUserFmt: Format[JoinUser] = Json.format[JoinUser]
@@ -34,9 +35,9 @@ object Subscriber extends IOApp.Simple {
     for {
       typ <- (json \ "type").validate[String]
       args <- typ match {
-        case "Subscribe" => JsSuccess(None)
-        case "JoinUser"  => joinUserFmt.reads(json("args")).map(Some(_))
-        case _           => JsError("unrecognized request type")
+        case "JoinUser" => joinUserFmt.reads(json("args")).map(Some(_))
+        case "Load"     => JsSuccess(None)
+        case _          => JsError("unrecognized request type")
       }
     } yield Request(typ, args)
 
@@ -65,26 +66,41 @@ object Subscriber extends IOApp.Simple {
         send = flow
           .subscribe(10)
           .flatMap {
+            case Load =>
+              val stream1 = Stream.eval {
+                for {
+                  users <- redisResource.use { client =>
+                    client
+                      .zRangeByScore[Int]("users", ZRange(0, 0), None)
+                      .map(_.map(WebSocketFrame.Text(_)))
+                      .flatTap(values => IO.println(s"Stream Values: $values"))
+                      .flatMap(s => IO(Stream.emits[IO, WebSocketFrame.Text](s)))
+                  }
+                } yield users
+              }
+
+              stream1.flatten
             case ju: JoinUser =>
               val json = s"""{"username":"${ju.username}","userId":"${ju.userId}"}"""
-              Stream.emit(json.asText)
-            case Subscribe =>
-              val emits: IO[Stream[IO, WebSocketFrame.Text]] = (for {
-                users <- redisResource
-                  .use(_.zRangeByScore[Int]("users", ZRange(0, 0), Some(RangeLimit(1, 10))))
-                  .map(_.map(WebSocketFrame.Text(_)))
-                  .flatTap(IO.println)
-              } yield users).map(Stream.emits(_))
+              val stream1 = Stream.eval {
+                for {
+                  _ <- redisResource.use { client =>
+                    client
+                      .zAdd("users", None, ScoreWithValue(Score(1), json))
+                  }
+                } yield ()
+              }
 
-              Stream.eval(emits).flatMap(identity) concurrently redisStream.map(WebSocketFrame.Text(_))
-          },
+              stream1 >> Stream.eval(IO(json.asText))
+          }
+          .through(redisStream.map(WebSocketFrame.Text(_)).merge(_)),
         receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
             Json
               .parse(body)
               .as[Request]
               .args
-              .getOrElse(Subscribe)
+              .getOrElse(Load)
           }),
       )
     }
