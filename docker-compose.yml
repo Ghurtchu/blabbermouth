@@ -4,7 +4,7 @@ services:
   chat-server:
     build:
       context: .
-      dockerfile: ChatServerDockerfile
+      dockerfile: chatserver/ChatServerDockerfile
     ports:
       - "9000:9000"
     depends_on:
@@ -13,7 +13,7 @@ services:
   subscriber:
     build:
       context: .
-      dockerfile: SubscriberDockerfile
+      dockerfile: subscriber/SubscriberDockerfile
     ports:
       - "9001:9001"
     depends_on:
