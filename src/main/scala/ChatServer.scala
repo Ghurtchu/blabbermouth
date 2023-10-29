@@ -1,8 +1,11 @@
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
+import dev.profunktor.redis4cats.Redis
+import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
+import dev.profunktor.redis4cats.effects._
 import fs2.{Pipe, Stream}
 import fs2.concurrent.Topic
 import org.http4s.dsl.Http4sDsl
@@ -76,7 +79,6 @@ object ChatServer extends IOApp.Simple {
   case class Joined(
     participant: Participant,
     userId: String,
-    userStatus: Option[String],
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends Out
@@ -115,6 +117,11 @@ object ChatServer extends IOApp.Simple {
   implicit val writesChatExpired: Writes[ChatExpired] = Json.writes[ChatExpired]
 
   private def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
+
+  val redisResource: Resource[IO, SortedSetCommands[IO, String, String]] =
+    RedisClient[IO]
+      .from("redis://localhost")
+      .flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   val run = (for {
     redisStream <- RedisClient[IO]
@@ -175,10 +182,13 @@ object ChatServer extends IOApp.Simple {
                 println(scala.util.Try(Json.parse(body).as[Request]))
                 Json.parse(body).as[Request].args match {
                   // User joins for the first time
-                  case Join(u @ User, userId, _, None, None) =>
+                  case Join(u @ User, userId, un, None, None) =>
                     for {
-                      joined <- IO.pure(Joined(u, userId, Some("Waiting"), None, None))
-                      _ <- Stream.emit(joined.asJson).through(redisStream).compile.foldMonoid
+                      joined <- IO.pure(Joined(u, userId, None, None))
+                      json = s"""{"username":"$un","userId":"$userId","chatId":"$chatId"}"""
+                      pubSubJson = s"""{"type":"UserJoined","args":$json}"""
+                      _ <- redisResource.use(_.zAdd("users", None, ScoreWithValue(Score(0), json)))
+                      _ <- Stream.emit(pubSubJson).through(redisStream).compile.foldMonoid
                     } yield joined
                   // User re-joins (browser refresh), so we load chat history
                   case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))

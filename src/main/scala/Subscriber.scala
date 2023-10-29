@@ -1,12 +1,13 @@
-import ChatServer.{JsonSyntax, WebSocketTextSyntax}
+import ChatServer.{JsonSyntax, WebSocketTextSyntax, redisResource}
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import fs2.Stream
-import fs2.concurrent.Topic
+import dev.profunktor.redis4cats.effects.{RangeLimit, Score, ScoreWithValue, ZRange}
+import fs2.{Pure, Stream}
+import fs2.concurrent.{SignallingRef, Topic}
 import org.http4s.Method.GET
 import org.http4s.dsl.io._
 import org.http4s.ember.server.EmberServerBuilder
@@ -24,20 +25,46 @@ object Subscriber extends IOApp.Simple {
 
   sealed trait Message
 
-  case object Subscribe extends Message
-  case class JoinUser(userId: String, username: String) extends Message
+  sealed trait In extends Message
+  sealed trait Out extends Message
+
+  implicit val writesOut: Writes[Out] = new Writes[Out] {
+    override def writes(o: Out): JsValue =
+      o match {
+        case n: NewUser => writesNewUser.writes(n)
+      }
+  }
+
+  case object Load extends In
+  case class JoinUser(userId: String, username: String, chatId: String) extends In
   implicit val joinUserFmt: Format[JoinUser] = Json.format[JoinUser]
 
-  case class Request(`type`: String, args: Option[Message])
+  case class Request(`type`: String, args: Option[In])
   implicit val readsRequest: Reads[Request] = json =>
     for {
       typ <- (json \ "type").validate[String]
       args <- typ match {
-        case "Subscribe" => JsSuccess(None)
-        case "JoinUser"  => joinUserFmt.reads(json("args")).map(Some(_))
-        case _           => JsError("unrecognized request type")
+        case "JoinUser" => joinUserFmt.reads(json("args")).map(Some(_))
+        case "Load"     => JsSuccess(None)
+        case _          => JsError("unrecognized request type")
       }
     } yield Request(typ, args)
+
+  // use in Redis PubSub
+  case class NewUser(userId: String, username: String, chatId: String) extends Out
+  implicit val writesNewUser: Writes[NewUser] = Json.writes[NewUser]
+
+  case class Response(args: Out)
+  implicit val writesResponse: Writes[Response] = response => {
+    val `type` = response.args.getClass.getSimpleName
+    JsObject(
+      Map(
+        "type" -> JsString(`type`),
+        "args" -> writesOut.writes(response.args),
+      ),
+    )
+
+  }
 
   override val run = (for {
     flow <- Resource.eval(Topic[IO, Message])
@@ -64,16 +91,37 @@ object Subscriber extends IOApp.Simple {
         send = flow
           .subscribe(10)
           .flatMap {
-            case ju: JoinUser => Stream.eval(IO.pure(ju.asJson.asText))
-            case Subscribe    => redisStream.map(_.asText)
-          },
+            case Load =>
+              val stream1 = Stream.eval {
+                for {
+                  users <- redisResource.use { client =>
+                    client
+                      .zRangeByScore[Int]("users", ZRange(0, 0), None)
+                      .map(_.map(WebSocketFrame.Text(_)))
+                      .flatTap(values => IO.println(s"Stream Values: $values"))
+                      .flatMap(s => IO(Stream.emits[IO, WebSocketFrame.Text](s)))
+                  }
+                } yield users
+              }
+
+              stream1.flatten
+            case ju: JoinUser =>
+              val json = s"""{"username":"${ju.username}","userId":"${ju.userId}","chatId":"${ju.chatId}"}"""
+              val stream1 = Stream.eval {
+                redisResource
+                  .use(_.zAdd("users", None, ScoreWithValue(Score(1), json)))
+              }
+
+              stream1 >> Stream.emit(json.asText)
+          }
+          .through(redisStream.map(WebSocketFrame.Text(_)).merge(_)),
         receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
             Json
               .parse(body)
               .as[Request]
               .args
-              .getOrElse(Subscribe)
+              .getOrElse(Load)
           }),
       )
     }
