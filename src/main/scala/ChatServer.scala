@@ -62,7 +62,7 @@ object ChatServer extends IOApp.Simple {
     from: Participant,
     userId: String,
     supportId: String,
-    timestamp: Option[Instant],
+    timestamp: Option[Instant] = None,
   ) extends In
       with Out
   implicit val chatMsgFmt: Format[ChatMessage] = Json.format[ChatMessage]
@@ -140,6 +140,7 @@ object ChatServer extends IOApp.Simple {
       now <- IO.realTimeInstant
       _ <- chatHistory.getAndUpdate {
         _.flatMap { case (userId, history) =>
+          println(history.messages.lastOption)
           history.messages.lastOption
             .fold(Option(userId -> history)) {
               _.timestamp.flatMap { msgTimestamp =>
@@ -149,7 +150,7 @@ object ChatServer extends IOApp.Simple {
             }
         }
       }
-    } yield ()).flatMap(_ => IO.sleep(30.seconds)).foreverM.toResource
+    } yield ()).flatMap(_ => IO.sleep(5.minutes)).foreverM.toResource
   } yield ExitCode.Success).useForever
 
   implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json.prettyPrint(Json.toJson(self)) }
@@ -168,7 +169,8 @@ object ChatServer extends IOApp.Simple {
       case GET -> Root / "user" / "join" / username =>
         IO.both(generateRandomId, generateRandomId).flatMap { case (userId, chatId) =>
           for {
-            _ <- chatHistory.getAndUpdate(_.updated(userId, ChatHistory.init(chatId)))
+            _ <- chatHistory.getAndUpdate(_.updated(chatId, ChatHistory.init(chatId)))
+            _ <- chatHistory.get.flatTap(IO.println)
             chatTopic <- Topic[IO, Message]
             _ <- chatTopics.getAndUpdate(_.updated(chatId, chatTopic))
             response <- Ok(Registered(userId, username, chatId).asJson)
@@ -198,10 +200,15 @@ object ChatServer extends IOApp.Simple {
                   case Join(Support, _, _, Some(_), Some(_)) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // chat message either from user or support
                   case msg: ChatMessage =>
-                    findById(chatHistory)(chatId).flatMap {
-                      case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msg)).as(msg)
-                      case None       => IO(ChatExpired(chatId))
-                    }
+                    for {
+                      now <- IO.realTimeInstant
+                      msgWithTimestamp = msg.copy(timestamp = Some(now))
+                      chat <- findById(chatHistory)(chatId)
+                      _ <- chat match {
+                        case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msgWithTimestamp)).as(msgWithTimestamp)
+                        case None       => IO(ChatExpired(chatId))
+                      }
+                    } yield msg
                 }
               })
             case _ => (_: Stream[IO, WebSocketFrame]) => Stream.empty
