@@ -25,12 +25,21 @@ object Subscriber extends IOApp.Simple {
 
   sealed trait Message
 
-  case object Load extends Message
-  case object Subscribe extends Message
-  case class JoinUser(userId: String, username: String) extends Message
+  sealed trait In extends Message
+  sealed trait Out extends Message
+
+  implicit val writesOut: Writes[Out] = new Writes[Out] {
+    override def writes(o: Out): JsValue =
+      o match {
+        case n: NewUser => writesNewUser.writes(n)
+      }
+  }
+
+  case object Load extends In
+  case class JoinUser(userId: String, username: String, chatId: String) extends In
   implicit val joinUserFmt: Format[JoinUser] = Json.format[JoinUser]
 
-  case class Request(`type`: String, args: Option[Message])
+  case class Request(`type`: String, args: Option[In])
   implicit val readsRequest: Reads[Request] = json =>
     for {
       typ <- (json \ "type").validate[String]
@@ -40,6 +49,22 @@ object Subscriber extends IOApp.Simple {
         case _          => JsError("unrecognized request type")
       }
     } yield Request(typ, args)
+
+  // use in Redis PubSub
+  case class NewUser(userId: String, username: String, chatId: String) extends Out
+  implicit val writesNewUser: Writes[NewUser] = Json.writes[NewUser]
+
+  case class Response(args: Out)
+  implicit val writesResponse: Writes[Response] = response => {
+    val `type` = response.args.getClass.getSimpleName
+    JsObject(
+      Map(
+        "type" -> JsString(`type`),
+        "args" -> writesOut.writes(response.args),
+      ),
+    )
+
+  }
 
   override val run = (for {
     flow <- Resource.eval(Topic[IO, Message])
@@ -81,17 +106,13 @@ object Subscriber extends IOApp.Simple {
 
               stream1.flatten
             case ju: JoinUser =>
-              val json = s"""{"username":"${ju.username}","userId":"${ju.userId}"}"""
+              val json = s"""{"username":"${ju.username}","userId":"${ju.userId}","chatId":"${ju.chatId}"}"""
               val stream1 = Stream.eval {
-                for {
-                  _ <- redisResource.use { client =>
-                    client
-                      .zAdd("users", None, ScoreWithValue(Score(1), json))
-                  }
-                } yield ()
+                redisResource
+                  .use(_.zAdd("users", None, ScoreWithValue(Score(1), json)))
               }
 
-              stream1 >> Stream.eval(IO(json.asText))
+              stream1 >> Stream.emit(json.asText)
           }
           .through(redisStream.map(WebSocketFrame.Text(_)).merge(_)),
         receive = flow.publish

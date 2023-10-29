@@ -186,9 +186,10 @@ object ChatServer extends IOApp.Simple {
                   case Join(u @ User, userId, un, None, None) =>
                     for {
                       joined <- IO.pure(Joined(u, userId, Some("Waiting"), None, None))
-                      json = s"""{"username":"$un","userId":"$userId"}"""
+                      json = s"""{"username":"$un","userId":"$userId","chatId":"$chatId"}"""
+                      pubSubJson = s"""{"type":"UserJoined","args":$json"""
                       _ <- redisResource.use(_.zAdd("users", None, ScoreWithValue(Score(0), json)))
-                      _ <- Stream.emit(json).through(redisStream).compile.foldMonoid
+                      _ <- Stream.emit(pubSubJson).through(redisStream).compile.foldMonoid
                     } yield joined
                   // User re-joins (browser refresh), so we load chat history
                   case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))

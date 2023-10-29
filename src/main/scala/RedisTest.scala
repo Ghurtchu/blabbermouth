@@ -6,7 +6,7 @@ import dev.profunktor.redis4cats.data.RedisCodec
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import dev.profunktor.redis4cats.effects._
 
-object Rame extends IOApp.Simple {
+object RedisTest extends IOApp.Simple {
 
   val redisResource: Resource[IO, SortedSetCommands[IO, String, String]] =
     RedisClient[IO]
