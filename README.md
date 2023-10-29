@@ -33,7 +33,7 @@ Instructions:
     {
         "type": "Join",
         "args": {
-            "userId": "8b5ee49aa3bb45e1a8719179e5e25c12",
+            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
             "username": "Nika",
             "from": "User"
         }
@@ -42,10 +42,11 @@ Instructions:
    - Expect `JSON` response:
     ```json
     {
-       "type": "Joined",
-       "args": {
-           "participant": "User",
-           "userId": "f49f3cc665af4cb38092af714a4c87fa"
+        "type": "Joined",
+        "args": {
+            "participant": "User",
+            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
+            "chatId": "d2464b5386044daf9e36ffd414260f67"
         }
     }
     ```
@@ -56,13 +57,13 @@ Instructions:
          "type": "Load"
      }
      ```
-   - Expect `JSON` responses:
+   - Expect one ore more `JSON` WebSocket messages (TODO - consider sending one message with list of users instead of single message for each user):
      for pending users 
      ```json
      {
-         "username": "Zaza",
-         "userId": "8e0a7c3e1b2f489f8ce129a5167f71b5",
-         "chatId": "0765d196ec4e4d108b9e4b6fca7c8254"
+         "username": "Nika",
+         "userId": "9d6d2db0cdb84d8ba67105670d94d641",
+         "chatId": "d2464b5386044daf9e36ffd414260f67"
      }
      ```
      for newly joined users
@@ -76,7 +77,7 @@ Instructions:
           }
      }
      ```
-   - once `Support` clicks to the special user request, UI must send the `JoinUser` as websocket message so that it gets filtered out for other `Support` agents, at the same time UI must send another request in `step 4` (details in `step 4`)
+   - once `Support` clicks to the special user request, UI must send the `JoinUser` as websocket message so that it gets filtered out for other `Support` agents, at the same time UI must send another request to `ChatServer` - `step 4` (details in `step 4`)
    `JoinUser` looks like
    ```json 
     {
@@ -104,7 +105,7 @@ Instructions:
     {
         "type": "Join",
         "args": {
-            "userId" : "f49f3cc665af4cb38092af714a4c87fa",
+            "userId" : "9d6d2db0cdb84d8ba67105670d94d641",
             "supportUserName": "Vika",
             "username": "Nika",
             "from": "Support"    
@@ -117,7 +118,7 @@ Instructions:
         "type": "Joined",
         "args": {
             "participant": "Support",
-            "userId": "f49f3cc665af4cb38092af714a4c87fa",
+            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "supportUserName": "Vika"
           }
@@ -128,9 +129,9 @@ Instructions:
     {
         "type": "ChatMessage",
         "args": {
-            "userId" : "f49f3cc665af4cb38092af714a4c87fa",
+            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
-            "content": "Hey, I want to tranasfer money offshore, how can I do it via internet bank?",
+            "content": "Hey, I want to transfer money offshore, how can I do it via internet bank?",
             "from": "User"    
         }
     }
@@ -140,7 +141,7 @@ Instructions:
     {
         "type": "ChatMessage",
         "args": {
-            "userId": "f49f3cc665af4cb38092af714a4c87fa",
+            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "content": "hey",
             "timestamp": "2023-10-22T18:18:59.360855Z",
@@ -153,7 +154,7 @@ Instructions:
     {
         "type": "ChatMessage",
         "args": {
-            "userId" : "f49f3cc665af4cb38092af714a4c87fa",
+            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
             "supportId": "7c270542e64a4dfbb2bc1c7793746674",
             "supportUserName": "Vika",
             "content": "Hello, please navigate to Transfer and then select Offshore :)",

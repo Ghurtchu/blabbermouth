@@ -6,7 +6,7 @@ import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import dev.profunktor.redis4cats.effects.{RangeLimit, Score, ScoreWithValue, ZRange}
+import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue, ZRange}
 import fs2.{Pure, Stream}
 import fs2.concurrent.{SignallingRef, Topic}
 import org.http4s.Method.GET
@@ -15,10 +15,9 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import org.http4s.HttpRoutes
-import org.http4s.dsl.io
 import play.api.libs.json._
 
-import scala.concurrent.duration.{DurationInt, NANOSECONDS}
+import scala.concurrent.duration.DurationInt
 
 /** subscribes to Redis pub/sub and forwards messages to UI via WebSockets
   */
@@ -71,7 +70,6 @@ object Subscriber extends IOApp.Simple {
         "args" -> writesOut.writes(response.args),
       ),
     )
-
   }
 
   override val run = (for {
