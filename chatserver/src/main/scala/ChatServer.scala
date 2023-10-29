@@ -21,8 +21,8 @@ import java.time.temporal.ChronoUnit
 import scala.concurrent.duration.DurationInt
 
 /**   - publishes Join message to Redis pub/sub
- *   - serves chat functionality via WebSockets
- */
+  *   - serves chat functionality via WebSockets
+  */
 object ChatServer extends IOApp.Simple {
 
   type UserId = String
@@ -58,30 +58,30 @@ object ChatServer extends IOApp.Simple {
   implicit val readsParticipant: Reads[Participant] = _.validate[String].flatMap(toParticipant)
 
   case class ChatMessage(
-                          content: String,
-                          from: Participant,
-                          userId: String,
-                          supportId: String,
-                          timestamp: Option[Instant] = None,
-                        ) extends In
-    with Out
+    content: String,
+    from: Participant,
+    userId: String,
+    supportId: String,
+    timestamp: Option[Instant] = None,
+  ) extends In
+      with Out
   implicit val chatMsgFmt: Format[ChatMessage] = Json.format[ChatMessage]
 
   case class Join(
-                   from: Participant,
-                   userId: String,
-                   username: String,
-                   supportId: Option[String],
-                   supportUserName: Option[String],
-                 ) extends In
+    from: Participant,
+    userId: String,
+    username: String,
+    supportId: Option[String],
+    supportUserName: Option[String],
+  ) extends In
   implicit val readsJoin: Reads[Join] = Json.reads[Join]
 
   case class Joined(
-                     participant: Participant,
-                     userId: String,
-                     supportId: Option[String],
-                     supportUserName: Option[String],
-                   ) extends Out
+    participant: Participant,
+    userId: String,
+    supportId: Option[String],
+    supportUserName: Option[String],
+  ) extends Out
   implicit val writesJoined: Writes[Joined] = Json.writes[Joined]
 
   case class Registered(userId: String, username: String, chatId: String) extends Out
@@ -158,11 +158,11 @@ object ChatServer extends IOApp.Simple {
   def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get.flatMap(c => IO(c.get(id)))
 
   private def webSocketApp(
-                            wsb: WebSocketBuilder2[IO],
-                            chatTopics: Ref[IO, Map[ChatId, ChatTopic]],
-                            chatHistory: Ref[IO, Map[ChatId, ChatHistory]],
-                            redisStream: Stream[IO, String] => Stream[IO, Unit],
-                          ): HttpApp[IO] = {
+    wsb: WebSocketBuilder2[IO],
+    chatTopics: Ref[IO, Map[ChatId, ChatTopic]],
+    chatHistory: Ref[IO, Map[ChatId, ChatHistory]],
+    redisStream: Stream[IO, String] => Stream[IO, Unit],
+  ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
     HttpRoutes.of[IO] {

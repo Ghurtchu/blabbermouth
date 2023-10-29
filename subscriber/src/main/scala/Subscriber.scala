@@ -21,7 +21,7 @@ import play.api.libs.json._
 import scala.concurrent.duration.{DurationInt, NANOSECONDS}
 
 /** subscribes to Redis pub/sub and forwards messages to UI via WebSockets
- */
+  */
 object Subscriber extends IOApp.Simple {
 
   val redisResource: Resource[IO, SortedSetCommands[IO, String, String]] =
@@ -90,10 +90,10 @@ object Subscriber extends IOApp.Simple {
 
   } yield ()).useForever
   def webSocketApp(
-                    redisStream: Stream[IO, String],
-                    flow: Topic[IO, Message],
-                    wsb: WebSocketBuilder2[IO],
-                  ): HttpRoutes[IO] =
+    redisStream: Stream[IO, String],
+    flow: Topic[IO, Message],
+    wsb: WebSocketBuilder2[IO],
+  ): HttpRoutes[IO] =
     HttpRoutes.of[IO] { case GET -> Root / "joins" =>
       wsb.build(
         send = flow
