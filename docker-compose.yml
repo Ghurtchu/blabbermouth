@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  chat-server:
+    build:
+      context: .
+      dockerfile: ChatServerDockerfile
+    ports:
+      - "9000:9000"
+    depends_on:
+      - redis
+    # Add any necessary environment variables or other configurations here
+  subscriber:
+    build:
+      context: .
+      dockerfile: SubscriberDockerfile
+    ports:
+      - "9001:9001"
+    depends_on:
+      - redis
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    # Add any necessary configurations here

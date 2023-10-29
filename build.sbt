@@ -17,3 +17,10 @@ lazy val root = (project in file("."))
       "dev.profunktor" %% "redis4cats-streams" % "1.4.1"
     )
   )
+
+assemblyMergeStrategy in assembly := {
+  case PathList("META-INF", _*) => MergeStrategy.discard
+  case _                        => MergeStrategy.first
+}
+
+assemblyJarName in assembly := "chatserver.jar"

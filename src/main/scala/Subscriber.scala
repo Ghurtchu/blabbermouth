@@ -1,6 +1,7 @@
-import ChatServer.{JsonSyntax, WebSocketTextSyntax, redisResource}
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
+import dev.profunktor.redis4cats.Redis
+import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
@@ -22,6 +23,11 @@ import scala.concurrent.duration.{DurationInt, NANOSECONDS}
 /** subscribes to Redis pub/sub and forwards messages to UI via WebSockets
   */
 object Subscriber extends IOApp.Simple {
+
+  val redisResource: Resource[IO, SortedSetCommands[IO, String, String]] =
+    RedisClient[IO]
+      .from("redis://redis")
+      .flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   sealed trait Message
 
@@ -71,7 +77,7 @@ object Subscriber extends IOApp.Simple {
   override val run = (for {
     flow <- Resource.eval(Topic[IO, Message])
     redisPubSubConnection <- RedisClient[IO]
-      .from("redis://localhost")
+      .from("redis://redis")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
     redisStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
     _ <- EmberServerBuilder
@@ -115,7 +121,7 @@ object Subscriber extends IOApp.Simple {
               }
               val removeUser = s"""{"type":"RemoveUser","args":{"userId":"${ju.userId}"}}"""
 
-              stream1 >> Stream.emit(removeUser.asText)
+              stream1 >> Stream.emit(WebSocketFrame.Text(removeUser))
           }
           .through(redisStream.map(WebSocketFrame.Text(_)).merge(_)),
         receive = flow.publish

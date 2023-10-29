@@ -120,12 +120,12 @@ object ChatServer extends IOApp.Simple {
 
   val redisResource: Resource[IO, SortedSetCommands[IO, String, String]] =
     RedisClient[IO]
-      .from("redis://localhost")
+      .from("redis://redis")
       .flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   val run = (for {
     redisStream <- RedisClient[IO]
-      .from("redis://localhost")
+      .from("redis://redis")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
     chatTopics <- Resource.eval(IO.ref(Map.empty[ChatId, ChatTopic]))
     chatHistory <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
