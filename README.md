@@ -7,6 +7,14 @@ Service oriented architecture with two backends:
 - `Subscriber`:
   - subscribes to `users` channel in `Redis pub/sub` and publishes messages to UI using `WebSockets`
 
+Requirements for running the whole project:
+- Docker engine
+
+Instructions:
+- clone the repo
+- cd into repo
+- run: `docker-compose up`
+
 **Protocol and flow description for building UI**:
 
 1) Register `User` in `ChatServer` by sending HTTP request to: `GET localhost:9000/user/join/{userName}`
