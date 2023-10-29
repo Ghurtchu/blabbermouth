@@ -79,7 +79,6 @@ object ChatServer extends IOApp.Simple {
   case class Joined(
     participant: Participant,
     userId: String,
-    userStatus: Option[String],
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends Out
@@ -185,9 +184,9 @@ object ChatServer extends IOApp.Simple {
                   // User joins for the first time
                   case Join(u @ User, userId, un, None, None) =>
                     for {
-                      joined <- IO.pure(Joined(u, userId, Some("Waiting"), None, None))
+                      joined <- IO.pure(Joined(u, userId, None, None))
                       json = s"""{"username":"$un","userId":"$userId","chatId":"$chatId"}"""
-                      pubSubJson = s"""{"type":"UserJoined","args":$json"""
+                      pubSubJson = s"""{"type":"UserJoined","args":$json}"""
                       _ <- redisResource.use(_.zAdd("users", None, ScoreWithValue(Score(0), json)))
                       _ <- Stream.emit(pubSubJson).through(redisStream).compile.foldMonoid
                     } yield joined

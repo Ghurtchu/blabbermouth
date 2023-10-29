@@ -2,10 +2,10 @@
 
 Service oriented architecture with two backends:
 - `ChatServer`:
-  - publishes user join request messages to `Join` channel in `Redis pub/sub`
+  - publishes user join request messages to `users` channel in `Redis pub/sub`
   - enables `User` and `Support` to exchange messages via chat using `WebSockets`
 - `Subscriber`:
-  - subscribes to `Join` channel in `Redis pub/sub` and forwards & filters messages to UI using `WebSockets`
+  - subscribes to `users` channel in `Redis pub/sub` and publishes messages to UI using `WebSockets`
 
 **Protocol and flow description for building UI**:
 
@@ -19,7 +19,7 @@ Service oriented architecture with two backends:
     }
     ```
 2) Initiate WebSocket connection for `User` in `ChatServer` by sending request to: `GET localhost:9000/chat/{chatId}`
-   - attach request body:
+   - send first message:
     ```json
     {
         "type": "Join",
@@ -41,15 +41,54 @@ Service oriented architecture with two backends:
     }
     ```
 3) Initiate WebSocket connection for `Support` in `Subscriber` by sending request to: `GET localhost:9001/joins`
-   - Expect `JSON` WebSocket messages:
+   - always send first WS message for loading pending users, it also subscribes to Redis PubSub and reads newly joined users
      ```json
      {
-         "participant": "User",
-         "userId": "...",
-         "chatId": "..."
+         "type": "Load"
      }
      ```
-   - once `Support` clicks to the special user request UI must send the `userId` as websocket message so that it gets filtered out for other `Support` agents
+   - Expect `JSON` responses:
+     for pending users 
+     ```json
+     {
+         "username": "Zaza",
+         "userId": "8e0a7c3e1b2f489f8ce129a5167f71b5",
+         "chatId": "0765d196ec4e4d108b9e4b6fca7c8254"
+     }
+     ```
+     for newly joined users
+     ```json
+     {
+         "type": "UserJoined",
+         "args": {
+             "username": "Dodo",
+             "userId": "b646273c1f8840b1ad296b40ef62f2c5",
+             "chatId": "2500f760be124d299f214c5f3aa0ecf2"
+          }
+     }
+     ```
+   - once `Support` clicks to the special user request, UI must send the `JoinUser` as websocket message so that it gets filtered out for other `Support` agents, at the same time UI must send another request in `step 4` (details in `step 4`)
+   `JoinUser` looks like
+   ```json 
+    {
+        "type": "JoinUser",
+        "args": {
+            "userId": "8e0a7c3e1b2f489f8ce129a5167f71b5",
+            "chatId": "0765d196ec4e4d108b9e4b6fca7c8254",
+            "username": "Zaza"
+        }
+    }
+   ```
+   as a response the backend sends following WebSocket message:
+   ```json
+   {
+       "type": "RemoveUser",
+       "args": {
+           "userId": "8e0a7c3e1b2f489f8ce129a5167f71b5"
+       }
+   }
+   ```
+   This message will be broadcasted to all support UI-s and Frontend will be able to drop this user from the list
 4) Initiate WebSocket connection for `Support` in `ChatServer` by sending request to: `GET localhost:9000/chat/{chatId}`
    - attach request body:
     ```json
