@@ -203,10 +203,9 @@ object ChatServer extends IOApp.Simple {
                     for {
                       now <- IO.realTimeInstant
                       msgWithTimestamp = msg.copy(timestamp = Some(now))
-                      chat <- findById(chatHistory)(chatId)
-                      _ <- chat match {
+                      _ <- findById(chatHistory)(chatId).flatMap {
                         case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msgWithTimestamp)).as(msgWithTimestamp)
-                        case None       => IO(ChatExpired(chatId))
+                        case None       => IO.pure(ChatExpired(chatId))
                       }
                     } yield msg
                 }
