@@ -20,6 +20,7 @@ lazy val chatserver = (project in file("chatserver"))
   .settings(
     name := "chatserver",
     assembly / assemblyJarName := "chatserver.jar",
+    assembly / mainClass := Some("ChatServer") // Replace "com.example.MainClass" with the fully qualified name of your main class
   )
   .settings(commonSettings)
 

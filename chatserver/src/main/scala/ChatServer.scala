@@ -79,6 +79,7 @@ object ChatServer extends IOApp.Simple {
   case class Joined(
     participant: Participant,
     userId: String,
+    chatId: String,
     supportId: Option[String],
     supportUserName: Option[String],
   ) extends Out
@@ -116,7 +117,7 @@ object ChatServer extends IOApp.Simple {
   case class ChatExpired(chatId: String) extends Out
   implicit val writesChatExpired: Writes[ChatExpired] = Json.writes[ChatExpired]
 
-  private def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
+  def generateRandomId: IO[String] = IO(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
   val redisResource: Resource[IO, SortedSetCommands[IO, String, String]] =
     RedisClient[IO]
@@ -138,9 +139,9 @@ object ChatServer extends IOApp.Simple {
       .build
     _ <- (for {
       now <- IO.realTimeInstant
+      _ <- IO.println(s"Running cache cleanup for ChatHistory: $now")
       _ <- chatHistory.getAndUpdate {
         _.flatMap { case (userId, history) =>
-          println(history.messages.lastOption)
           history.messages.lastOption
             .fold(Option(userId -> history)) {
               _.timestamp.flatMap { msgTimestamp =>
@@ -150,7 +151,7 @@ object ChatServer extends IOApp.Simple {
             }
         }
       }
-    } yield ()).flatMap(_ => IO.sleep(5.minutes)).foreverM.toResource
+    } yield ()).flatMap(_ => IO.sleep(2.minutes)).foreverM.toResource
   } yield ExitCode.Success).useForever
 
   implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json.prettyPrint(Json.toJson(self)) }
@@ -169,10 +170,12 @@ object ChatServer extends IOApp.Simple {
       case GET -> Root / "user" / "join" / username =>
         IO.both(generateRandomId, generateRandomId).flatMap { case (userId, chatId) =>
           for {
+            _ <- IO.println(s"Registering $username ...")
             _ <- chatHistory.getAndUpdate(_.updated(chatId, ChatHistory.init(chatId)))
-            _ <- chatHistory.get.flatTap(IO.println)
+            _ <- chatHistory.get.flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
             chatTopic <- Topic[IO, Message]
             _ <- chatTopics.getAndUpdate(_.updated(chatId, chatTopic))
+            _ <- IO.println(s"Registered $username")
             response <- Ok(Registered(userId, username, chatId).asJson)
           } yield response
         }
@@ -181,31 +184,43 @@ object ChatServer extends IOApp.Simple {
           findById(chatTopics)(chatId).map {
             case Some(chat) =>
               chat.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
-                println(scala.util.Try(Json.parse(body).as[Request]))
+                println(s"received message: $body")
                 Json.parse(body).as[Request].args match {
                   // User joins for the first time
                   case Join(u @ User, userId, un, None, None) =>
                     for {
-                      joined <- IO.pure(Joined(u, userId, None, None))
-                      json = s"""{"username":"$un","userId":"$userId","chatId":"$chatId"}"""
+                      joined <- IO.pure(Joined(u, userId, chatId, None, None))
+                      json = joined.asJson
                       pubSubJson = s"""{"type":"UserJoined","args":$json}"""
+                      _ <- IO.println(s"Writing $json into Redis with Score 0 - pending")
                       _ <- redisResource.use(_.zAdd("users", None, ScoreWithValue(Score(0), json)))
+                      _ <- IO.println(s"Publishing $pubSubJson into Redis pub/sub for Support UI")
                       _ <- Stream.emit(pubSubJson).through(redisStream).compile.foldMonoid
                     } yield joined
                   // User re-joins (browser refresh), so we load chat history
                   case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // Support joins for the first time
-                  case Join(s @ Support, userId, _, None, u @ Some(_)) => generateRandomId.map(id => Joined(s, userId, Some(id), u))
+                  case Join(s @ Support, userId, _, None, u @ Some(_)) =>
+                    for {
+                      _ <- IO.println(s"Support attempting to join user with userId: $userId")
+                      joined <- generateRandomId.map(id => Joined(s, userId, chatId, Some(id), u))
+                      _ <- IO.println(s"Support joined the user with userId: $userId")
+                    } yield joined
                   // Support re-joins (browser refresh), so we load chat history
                   case Join(Support, _, _, Some(_), Some(_)) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // chat message either from user or support
                   case msg: ChatMessage =>
                     for {
                       now <- IO.realTimeInstant
+                      _ <- IO.println(s"${msg.from} sent message=${msg.content}, timestamp: $now")
                       msgWithTimestamp = msg.copy(timestamp = Some(now))
                       _ <- findById(chatHistory)(chatId).flatMap {
-                        case Some(hist) => chatHistory.getAndUpdate(_.updated(chatId, hist + msgWithTimestamp)).as(msgWithTimestamp)
-                        case None       => IO.pure(ChatExpired(chatId))
+                        case Some(hist) =>
+                          chatHistory
+                            .getAndUpdate(_.updated(chatId, hist + msgWithTimestamp))
+                            .as(msgWithTimestamp)
+                            .flatTap(_ => IO.println("ChatHistory was updated"))
+                        case None => IO.pure(ChatExpired(chatId)).flatTap(ce => IO.println(s"Chat was expired: $ce"))
                       }
                     } yield msg
                 }

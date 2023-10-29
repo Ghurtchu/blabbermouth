@@ -100,6 +100,7 @@ object Subscriber extends IOApp.Simple {
           .subscribe(10)
           .flatMap {
             case Load =>
+              println("Loading pending users...")
               val stream1 = Stream.eval {
                 for {
                   users <- redisResource.use { client =>
@@ -112,25 +113,29 @@ object Subscriber extends IOApp.Simple {
                 } yield users
               }
 
-              stream1.flatten
+              stream1.flatten.debug(_ => "Loading done")
             case ju: JoinUser =>
-              val json = s"""{"username":"${ju.username}","userId":"${ju.userId}","chatId":"${ju.chatId}"}"""
-              val stream1 = Stream.eval {
-                redisResource
-                  .use(_.zAdd("users", None, ScoreWithValue(Score(1), json)))
-              }
+              println(s"Attempting joining the user: $ju")
+              val json = Json.prettyPrint(Json.toJson(ju))
+              val stream1 = Stream.eval(redisResource.use(_.zAdd("users", None, ScoreWithValue(Score(1), json))))
               val removeUser = s"""{"type":"RemoveUser","args":{"userId":"${ju.userId}"}}"""
+              println(s"sending back $removeUser")
 
               stream1 >> Stream.emit(WebSocketFrame.Text(removeUser))
           }
           .through(redisStream.map(WebSocketFrame.Text(_)).merge(_)),
         receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
-            Json
+            println(s"received message: $body")
+            println(s"parsing message: $body")
+            val result = Json
               .parse(body)
               .as[Request]
               .args
               .getOrElse(Load)
+            println(s"parsed message to: $result")
+
+            result
           }),
       )
     }
