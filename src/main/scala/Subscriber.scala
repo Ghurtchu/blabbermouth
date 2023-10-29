@@ -54,6 +54,8 @@ object Subscriber extends IOApp.Simple {
   case class NewUser(userId: String, username: String, chatId: String) extends Out
   implicit val writesNewUser: Writes[NewUser] = Json.writes[NewUser]
 
+  case class RemoveUser(userId: String)
+
   case class Response(args: Out)
   implicit val writesResponse: Writes[Response] = response => {
     val `type` = response.args.getClass.getSimpleName
@@ -111,8 +113,9 @@ object Subscriber extends IOApp.Simple {
                 redisResource
                   .use(_.zAdd("users", None, ScoreWithValue(Score(1), json)))
               }
+              val removeUser = s"""{"type":"RemoveUser","args":{"userId":"${ju.userId}"}}"""
 
-              stream1 >> Stream.emit(json.asText)
+              stream1 >> Stream.emit(removeUser.asText)
           }
           .through(redisStream.map(WebSocketFrame.Text(_)).merge(_)),
         receive = flow.publish

@@ -193,7 +193,7 @@ object ChatServer extends IOApp.Simple {
                   // User re-joins (browser refresh), so we load chat history
                   case Join(User, _, _, Some(_), _) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // Support joins for the first time
-                  case Join(s @ Support, userId, _, None, u @ Some(_)) => generateRandomId.map(id => Joined(s, userId, Some(id), None, u))
+                  case Join(s @ Support, userId, _, None, u @ Some(_)) => generateRandomId.map(id => Joined(s, userId, Some(id), u))
                   // Support re-joins (browser refresh), so we load chat history
                   case Join(Support, _, _, Some(_), Some(_)) => findById(chatHistory)(chatId).map(_.getOrElse(ChatExpired(chatId)))
                   // chat message either from user or support
