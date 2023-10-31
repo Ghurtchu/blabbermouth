@@ -252,12 +252,7 @@ object ChatServer extends IOApp.Simple {
           .withOnClose {
             IO.println(s"User left the chat, chat id: $chatId") *>
               Stream
-                .emit {
-                  Map(
-                    "type" -> "UserLeft",
-                    "args" -> UserLeft(chatId).asJson,
-                  ).asJson
-                }
+                .emit(Map("type" -> "UserLeft", "args" -> UserLeft(chatId).asJson).asJson)
                 .through(redisPubSub)
                 .compile
                 .drain
