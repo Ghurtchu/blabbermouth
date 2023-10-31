@@ -1,4 +1,5 @@
 import cats.effect._
+import cats.effect.std.Queue
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.algebra.SortedSetCommands
@@ -120,22 +121,26 @@ object ChatServer extends IOApp.Simple {
   case class ChatExpired(chatId: String) extends Out
   implicit val writesChatExpired: Writes[ChatExpired] = Json.writes[ChatExpired]
 
+  case class UserLeft(chatId: String) extends AnyVal
+  implicit val writesUserLeft: Writes[UserLeft] = Json.writes[UserLeft]
+
   def generateRandomId: IO[String] = IO.delay(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from("redis://redis").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
+    RedisClient[IO].from("redis://localhost").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   val run = (for {
     redisPubSub <- RedisClient[IO]
-      .from("redis://redis")
+      .from("redis://localhost")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
     chatTopicsRef <- Resource.eval(IO.ref(Map.empty[ChatId, ChatTopic]))
     chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
+    q <- Resource.eval(Queue.unbounded[IO, String])
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, chatTopicsRef, chatHistoryRef, redisPubSub))
+      .withHttpWebSocketApp(webSocketApp(_, chatTopicsRef, chatHistoryRef, redisPubSub, q))
       .withIdleTimeout(120.seconds)
       .build
     _ <- (for {
@@ -162,6 +167,7 @@ object ChatServer extends IOApp.Simple {
     chatTopicsRef: Ref[IO, Map[ChatId, ChatTopic]],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     redisPubSub: Stream[IO, String] => Stream[IO, Unit],
+    q: Queue[IO, String],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -195,7 +201,7 @@ object ChatServer extends IOApp.Simple {
                       _ <- IO.println(s"User with userId: $userId is attempting to join the chat server")
                       joined <- IO.pure(Joined(u, userId, chatId, None, None))
                       json = joined.asJson
-                      pubSubJson = s"""{"type":"UserJoined","args":$json}"""
+                      pubSubJson = Map("type" -> "UserJoined", "args" -> json.asJson).asJson
                       _ <- IO.println(s"Writing $json into Redis SortedSet with Score 0 - pending")
                       _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(0), json)))
                       _ <- IO.println(s"""Publishing $pubSubJson into Redis pub/sub "users" channel""")
@@ -242,7 +248,21 @@ object ChatServer extends IOApp.Simple {
         val receive: Pipe[IO, WebSocketFrame, Unit] = stream => Stream.eval(lazyReceive).flatMap(_(stream))
         val send: Stream[IO, WebSocketFrame] = Stream.eval(lazySend).flatten
 
-        wsb.build(send, receive)
+        wsb
+          .withOnClose {
+            IO.println(s"User left the chat, chat id: $chatId") *>
+              Stream
+                .emit {
+                  Map(
+                    "type" -> "UserLeft",
+                    "args" -> UserLeft(chatId).asJson,
+                  ).asJson
+                }
+                .through(redisPubSub)
+                .compile
+                .drain
+          }
+          .build(send, receive)
 
     }
   }.orNotFound

@@ -24,7 +24,7 @@ import scala.concurrent.duration.DurationInt
 object Subscriber extends IOApp.Simple {
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from("redis://redis").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
+    RedisClient[IO].from("redis://localhost").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   sealed trait Message
 
@@ -71,7 +71,7 @@ object Subscriber extends IOApp.Simple {
   override val run = (for {
     flow <- Resource.eval(Topic[IO, Message])
     redisPubSubConnection <- RedisClient[IO]
-      .from("redis://redis")
+      .from("redis://localhost")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
     redisStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
     _ <- EmberServerBuilder
@@ -118,9 +118,9 @@ object Subscriber extends IOApp.Simple {
           }
           .through { stream =>
             redisPubSub
-              .map { newUser =>
-                println(s"$newUser was consumed from pub/sub channel")
-                WebSocketFrame.Text(newUser)
+              .map { message =>
+                println(s"$message was consumed from pub/sub channel")
+                WebSocketFrame.Text(message)
               }
               .merge(stream)
           },
