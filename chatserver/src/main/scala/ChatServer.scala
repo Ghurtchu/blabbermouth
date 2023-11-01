@@ -92,16 +92,19 @@ object ChatServer extends IOApp.Simple {
     supportUserName: Option[String],
   ) extends Out
   implicit val writesJoined: Writes[Joined] = Json.writes[Joined]
+  case class UserData(username: String, userId: String, chatId: String)
+  implicit val writesUpdateUserStatus: Writes[UserData] = Json.writes[UserData]
 
   case class Registered(userId: String, username: String, chatId: String) extends Out
   implicit val writesRegistered: Writes[Registered] = Json.writes[Registered]
 
-  case class ChatHistory(userId: String, chatId: String, messages: Vector[ChatMessage]) extends Out {
+  case class ChatHistory(userData: UserData, messages: Vector[ChatMessage]) extends Out {
     def +(msg: ChatMessage): ChatHistory = copy(messages = messages :+ msg)
   }
   implicit val writesChatHistory: Writes[ChatHistory] = Json.writes[ChatHistory]
   object ChatHistory {
-    def init(userId: String, chatId: String): ChatHistory = new ChatHistory(userId, chatId, Vector.empty)
+    def init(username: String, userId: String, chatId: String): ChatHistory =
+      new ChatHistory(UserData(username, userId, chatId), Vector.empty)
   }
 
   case class Request(`type`: String, args: In)
@@ -124,9 +127,6 @@ object ChatServer extends IOApp.Simple {
 
   case class ChatExpired(chatId: String) extends Out
   implicit val writesChatExpired: Writes[ChatExpired] = Json.writes[ChatExpired]
-
-  case class UserLeft(userId: String, chatId: String)
-  implicit val writesUserLeft: Writes[UserLeft] = Json.writes[UserLeft]
 
   def generateRandomId: IO[String] = IO.delay(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
@@ -192,7 +192,7 @@ object ChatServer extends IOApp.Simple {
           for {
             _ <- IO.println(s"Registering $username in the system")
             _ <- chatHistoryRef
-              .updateAndGet(_.updated(chatId, ChatHistory.init(userId, chatId)))
+              .updateAndGet(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
               .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
             chatQ <- Queue.unbounded[IO, Message]
             _ <- chatQsRef
@@ -214,13 +214,14 @@ object ChatServer extends IOApp.Simple {
                 println(s"processing ${request.`type`} message")
                 request.args match {
                   // User joins for the first time
-                  case Join(u @ User, userId, un, None, None) =>
+                  case Join(u @ User, userId, username, None, None) =>
                     for {
                       _ <- IO.println(s"User with userId: $userId is attempting to join the chat server")
                       joined = Joined(u, userId, chatId, None, None)
-                      pubSubMsgAsJson = PubSubMessage[Joined]("UserJoined", joined).asJson
+                      userData = UserData(username, userId, chatId)
+                      pubSubMsgAsJson = PubSubMessage[UserData]("UserJoined", userData).asJson
                       _ <- IO.println(s"Writing $joined into Redis SortedSet with Score 0 - pending")
-                      _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(0), joined.asJson)))
+                      _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(0), userData.asJson)))
                       _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")
                       _ <- Stream.emit(pubSubMsgAsJson).through(pubSubFlow).compile.drain
                       _ <- queue offer joined
@@ -267,11 +268,10 @@ object ChatServer extends IOApp.Simple {
         wsb
           .withOnClose {
             chatHistoryRef.get.map(_.get(chatId)).flatMap {
-              case Some(ChatHistory(userId, _, _)) =>
-                val json = Joined(User, userId, chatId, None, None).asJson
+              case Some(ChatHistory(ud: UserData, _)) =>
                 for {
-                  _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(1), json)))
-                  _ <- publishUserLeft(UserLeft(userId, chatId), pubSubFlow)
+                  _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(1), ud.asJson)))
+                  _ <- publishUserLeft(ud, pubSubFlow)
                 } yield ()
               case None => IO.unit
             }
@@ -281,11 +281,11 @@ object ChatServer extends IOApp.Simple {
   }.orNotFound
 
   private def publishUserLeft(
-    userLeft: UserLeft,
+    userData: UserData,
     pubSubFlow: PubSubFlow,
   ): IO[Unit] =
-    IO.println(s"User left the chat, chat id: ${userLeft.chatId}") *> Stream
-      .emit(PubSubMessage[UserLeft]("UserLeft", userLeft).asJson)
+    IO.println(s"User left the chat, chat id: ${userData.chatId}") *> Stream
+      .emit(PubSubMessage[UserData]("UserLeft", userData).asJson)
       .through(pubSubFlow)
       .compile
       .drain
