@@ -24,18 +24,15 @@ import scala.concurrent.duration.DurationInt
 object Subscriber extends IOApp.Simple {
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from("redis://localhost").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
+    RedisClient[IO].from("redis://redis").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   sealed trait Message
 
   sealed trait In extends Message
   sealed trait Out extends Message
 
-  implicit val writesOut: Writes[Out] = new Writes[Out] {
-    override def writes(o: Out): JsValue =
-      o match {
-        case n: NewUser => writesNewUser.writes(n)
-      }
+  implicit val writesOut: Writes[Out] = { case n: NewUser =>
+    writesNewUser.writes(n)
   }
 
   case object Load extends In
@@ -71,20 +68,20 @@ object Subscriber extends IOApp.Simple {
   override val run = (for {
     flow <- Resource.eval(Topic[IO, Message])
     redisPubSubConnection <- RedisClient[IO]
-      .from("redis://localhost")
+      .from("redis://redis")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
-    redisStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
+    pubSubStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9001")
-      .withHttpWebSocketApp(webSocketApp(redisStream, flow, _).orNotFound)
+      .withHttpWebSocketApp(webSocketApp(pubSubStream, flow, _).orNotFound)
       .withIdleTimeout(60.minutes)
       .build
 
   } yield ()).useForever
   def webSocketApp(
-    redisPubSub: Stream[IO, String],
+    pubSubStream: Stream[IO, String],
     flow: Topic[IO, Message],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =
@@ -117,9 +114,9 @@ object Subscriber extends IOApp.Simple {
               Stream.eval(response)
           }
           .through { stream =>
-            redisPubSub
+            pubSubStream
               .map { message =>
-                println(s"$message was consumed from pub/sub channel")
+                println(s"$message was consumed from Redis Pub/Sub")
                 WebSocketFrame.Text(message)
               }
               .merge(stream)
