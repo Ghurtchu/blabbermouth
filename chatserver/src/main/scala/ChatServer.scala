@@ -1,10 +1,10 @@
 import cats.effect._
 import cats.effect.std.Queue
 import cats.implicits.catsSyntaxOptionId
-import messages.{WebSocketMessage, PubSubMessage, Request, Response}
-import messages.WebSocketMessage.Out.codecs._
-import messages.WebSocketMessage.In._
-import messages.WebSocketMessage.Out._
+import ws.{WsMessage, WsRequestBody, WsResponseBody}
+import ws.WsMessage.Out.codecs._
+import ws.WsMessage.In._
+import ws.WsMessage.Out._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.algebra.SortedSetCommands
@@ -22,8 +22,9 @@ import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
 import domain.ChatParticipant._
 import domain.{ChatParticipant, User}
-import messages.WebSocketMessage._
+import ws.WsMessage._
 import org.http4s.websocket.WebSocketFrame.Text
+import redis.PubSubMessage
 
 import java.time.temporal.ChronoUnit
 import scala.concurrent.duration.DurationInt
@@ -39,20 +40,23 @@ object ChatServer extends IOApp.Simple {
   type EffectfulPipe[A] = Pipe[IO, A, Unit]
   type Flow = EffectfulPipe[WebSocketFrame]
   type PubSubFlow = EffectfulPipe[String]
+  type ChatQueue = Queue[IO, WsMessage]
 
   val redisLocation = "redis://redis"
 
   def generateRandomId: IO[String] = IO.delay(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
+    RedisClient[IO]
+      .from(redisLocation)
+      .flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   val run = (for {
     pubSubFlow <- RedisClient[IO]
       .from(redisLocation)
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
     chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
-    chatQsRef <- Resource.eval(IO.ref(Map.empty[ChatId, Queue[IO, WebSocketMessage]]))
+    chatQsRef <- Resource.eval(IO.ref(Map.empty[ChatId, ChatQueue]))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
@@ -84,7 +88,7 @@ object ChatServer extends IOApp.Simple {
     wsb: WebSocketBuilder2[IO],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     pubSubFlow: PubSubFlow,
-    chatQsRef: Ref[IO, Map[ChatId, Queue[IO, WebSocketMessage]]],
+    chatQsRef: Ref[IO, Map[ChatId, Queue[IO, WsMessage]]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -96,7 +100,7 @@ object ChatServer extends IOApp.Simple {
             _ <- chatHistoryRef
               .updateAndGet(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
               .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
-            chatQ <- Queue.unbounded[IO, WebSocketMessage]
+            chatQ <- Queue.unbounded[IO, WsMessage]
             _ <- chatQsRef
               .updateAndGet(_.updated(chatId, chatQ))
               .flatTap(cache => IO.println(s"ChatQueue cache: $cache"))
@@ -112,7 +116,7 @@ object ChatServer extends IOApp.Simple {
           case Some(queue) =>
             (frames: Frames) =>
               frames.evalMap { case Text(body, _) =>
-                val request = Json.parse(body).as[Request]
+                val request = Json.parse(body).as[WsRequestBody]
                 println(s"processing ${request.`type`} message")
                 request.args match {
                   // User joins for the first time
@@ -162,7 +166,8 @@ object ChatServer extends IOApp.Simple {
               }
           case None => _ => Stream.empty
         }
-        val lazySend = maybeQ.map(_.fold[Frames](Stream.empty)(q => Stream.repeatEval(q.take).collect { case o: Out => Response(o).asJson.asText }))
+        val lazySend =
+          maybeQ.map(_.fold[Frames](Stream.empty)(q => Stream.repeatEval(q.take).collect { case o: Out => WsResponseBody(o).asJson.asText }))
 
         val receive = (frames: Frames) => Stream.eval(lazyReceive).flatMap(_(frames))
         val send = Stream.eval(lazySend).flatten

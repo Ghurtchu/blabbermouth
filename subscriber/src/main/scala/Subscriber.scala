@@ -9,10 +9,10 @@ import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue, ZRange}
 import fs2.Stream
 import fs2.concurrent.Topic
-import messages.{Message, Request}
-import messages.Request.rr
-import messages.Message.In.{JoinUser, Load}
-import messages.Message.In.codecs._
+import ws.{WsMessage, WsRequestBody}
+import ws.WsRequestBody.rr
+import ws.WsMessage.In.{JoinUser, Load}
+import ws.WsMessage.In.codecs._
 import org.http4s.Method.GET
 import org.http4s.dsl.io._
 import org.http4s.ember.server.EmberServerBuilder
@@ -34,7 +34,7 @@ object Subscriber extends IOApp.Simple {
     RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   override val run = (for {
-    flow <- Resource.eval(Topic[IO, Message])
+    flow <- Resource.eval(Topic[IO, WsMessage])
     redisPubSubConnection <- RedisClient[IO]
       .from(redisLocation)
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
@@ -50,7 +50,7 @@ object Subscriber extends IOApp.Simple {
   } yield ()).useForever
   def webSocketApp(
     pubSubStream: Stream[IO, String],
-    flow: Topic[IO, Message],
+    flow: Topic[IO, WsMessage],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =
     HttpRoutes.of[IO] { case GET -> Root / "joins" =>
@@ -94,7 +94,7 @@ object Subscriber extends IOApp.Simple {
             println(s"received message: $body")
             Json
               .parse(body)
-              .as[Request]
+              .as[WsRequestBody]
               .tap(req => println(s"parsed message to: $req"))
               .pipe(_.args.getOrElse(Load))
           }),

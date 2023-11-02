@@ -1,14 +1,14 @@
-package messages
+package ws
 
-import messages.Message.In
-import messages.Message.In.{JoinUser, Load}
-import messages.Message.In.codecs._
+import ws.WsMessage.In
+import ws.WsMessage.In.{JoinUser, Load}
+import ws.WsMessage.In.codecs._
 import play.api.libs.json.{JsError, JsResult, JsSuccess, JsValue, Reads}
 
-case class Request(`type`: String, args: Option[In])
+case class WsRequestBody(`type`: String, args: Option[In])
 
-object Request {
-  implicit val rr: Reads[Request] = json =>
+object WsRequestBody {
+  implicit val rr: Reads[WsRequestBody] = json =>
     for {
       typ <- (json \ "type")
         .validateOpt[String]
@@ -24,5 +24,5 @@ object Request {
           case None if typ == "Load" => JsSuccess(Some(Load))
           case _                     => JsError("empty `args`")
         }
-    } yield Request(typ, maybeArgs)
+    } yield WsRequestBody(typ, maybeArgs)
 }

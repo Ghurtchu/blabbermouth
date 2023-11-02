@@ -1,13 +1,13 @@
-package messages
+package ws
 
 import play.api.libs.json.{Format, Json, Writes}
 
-sealed trait Message
+sealed trait WsMessage
 
-object Message {
+object WsMessage {
 
-  sealed trait In extends Message
-  sealed trait Out extends Message
+  sealed trait In extends WsMessage
+  sealed trait Out extends WsMessage
 
   object In {
     case object Load extends In

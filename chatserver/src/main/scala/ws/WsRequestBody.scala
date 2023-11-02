@@ -1,21 +1,20 @@
-package messages
+package ws
 
-import messages.WebSocketMessage.{ChatMessage, In}
-import messages.WebSocketMessage.In.Join
+import ws.WsMessage.{ChatMessage, In}
+import ws.WsMessage.In.Join
 import play.api.libs.json._
 
-case class Request(`type`: String, args: In)
+case class WsRequestBody(`type`: String, args: In)
 
-object Request {
+object WsRequestBody {
   import In.codecs._
-  import WebSocketMessage.codecs._
+  import WsMessage.codecs._
 
-  implicit val rr: Reads[Request] = json =>
+  implicit val rr: Reads[WsRequestBody] = json =>
     for {
       typ <- (json \ "type")
         .validateOpt[String]
         .flatMap(_.fold[JsResult[String]](JsError("`type` is empty"))(JsSuccess(_)))
-      _ = println(typ)
       args <- (json \ "args")
         .validateOpt[JsValue]
         .flatMap {
@@ -27,5 +26,5 @@ object Request {
             }
           }
         }
-    } yield Request(typ, args)
+    } yield WsRequestBody(typ, args)
 }
