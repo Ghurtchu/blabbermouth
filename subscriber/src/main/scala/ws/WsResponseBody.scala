@@ -10,12 +10,12 @@ case class WsResponseBody(args: Out) extends AnyVal {
 
 object WsResponseBody {
   implicit val wr: Writes[WsResponseBody] =
-    (webSocketResponse: WsResponseBody) => {
-      val `type` = webSocketResponse.args.getClass.getSimpleName
+    (body: WsResponseBody) => {
+      val `type` = body.args.getClass.getSimpleName
       JsObject(
         Map(
           "type" -> JsString(`type`),
-          "args" -> (implicitly[Writes[Out]] writes webSocketResponse.args),
+          "args" -> (implicitly[Writes[Out]] writes body.args),
         ),
       )
     }

@@ -11,11 +11,11 @@ object WsResponseBody {
   import WsMessage.Out.codecs.wo
 
   implicit val ww: Writes[WsResponseBody] =
-    (webSocketResponse: WsResponseBody) =>
+    (body: WsResponseBody) =>
       JsObject(
         Map(
-          "type" -> JsString(webSocketResponse.`type`),
-          "args" -> wo.writes(webSocketResponse.args),
+          "type" -> JsString(body.`type`),
+          "args" -> wo.writes(body.args),
         ),
       )
 }
