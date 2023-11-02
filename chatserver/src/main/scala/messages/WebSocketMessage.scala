@@ -1,20 +1,20 @@
 package messages
 
-import domain.{From, User}
+import domain.{ChatParticipant, User}
 import play.api.libs.json.{Format, Json, Reads, Writes}
 
 import java.time.Instant
 
-sealed trait Message
+sealed trait WebSocketMessage
 
-object Message {
+object WebSocketMessage {
 
-  sealed trait In extends Message
-  sealed trait Out extends Message
+  sealed trait In extends WebSocketMessage
+  sealed trait Out extends WebSocketMessage
 
   case class ChatMessage(
     content: String,
-    from: From,
+    from: ChatParticipant,
     userId: String,
     supportId: String,
     timestamp: Option[Instant] = None,
@@ -28,7 +28,7 @@ object Message {
   object In {
 
     case class Join(
-      from: From,
+      from: ChatParticipant,
       userId: String,
       username: String,
       supportId: Option[String],
@@ -59,7 +59,7 @@ object Message {
     }
 
     case class Joined(
-      participant: From,
+      participant: ChatParticipant,
       userId: String,
       chatId: String,
       supportId: Option[String],
@@ -69,7 +69,7 @@ object Message {
     case class ChatExpired(chatId: String) extends Out
 
     object codecs {
-      import Message.codecs._
+      import WebSocketMessage.codecs._
 
       implicit val wc: Writes[ChatExpired] = Json.writes[ChatExpired]
       implicit val wj: Writes[Joined] = Json.writes[Joined]

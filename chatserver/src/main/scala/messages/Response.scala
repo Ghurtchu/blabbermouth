@@ -1,6 +1,6 @@
 package messages
 
-import messages.Message.Out
+import messages.WebSocketMessage.Out
 import play.api.libs.json._
 
 case class Response(args: Out) extends AnyVal {
@@ -8,7 +8,7 @@ case class Response(args: Out) extends AnyVal {
 }
 
 object Response {
-  import Message.Out.codecs.wo
+  import WebSocketMessage.Out.codecs.wo
 
   implicit val wr: Writes[Response] = (response: Response) =>
     JsObject(

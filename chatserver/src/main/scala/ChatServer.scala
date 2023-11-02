@@ -1,10 +1,10 @@
 import cats.effect._
 import cats.effect.std.Queue
 import cats.implicits.catsSyntaxOptionId
-import messages.{Message, PubSubMessage, Request, Response}
-import messages.Message.Out.codecs._
-import messages.Message.In._
-import messages.Message.Out._
+import messages.{WebSocketMessage, PubSubMessage, Request, Response}
+import messages.WebSocketMessage.Out.codecs._
+import messages.WebSocketMessage.In._
+import messages.WebSocketMessage.Out._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.algebra.SortedSetCommands
@@ -20,9 +20,9 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
-import domain.From._
-import domain.{From, User}
-import messages.Message._
+import domain.ChatParticipant._
+import domain.{ChatParticipant, User}
+import messages.WebSocketMessage._
 import org.http4s.websocket.WebSocketFrame.Text
 
 import java.time.temporal.ChronoUnit
@@ -50,7 +50,7 @@ object ChatServer extends IOApp.Simple {
       .from("redis://localhost")
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
     chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
-    chatQsRef <- Resource.eval(IO.ref(Map.empty[ChatId, Queue[IO, Message]]))
+    chatQsRef <- Resource.eval(IO.ref(Map.empty[ChatId, Queue[IO, WebSocketMessage]]))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
@@ -79,10 +79,10 @@ object ChatServer extends IOApp.Simple {
   def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get.flatMap(c => IO(c.get(id)))
 
   private def webSocketApp(
-    wsb: WebSocketBuilder2[IO],
-    chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
-    pubSubFlow: PubSubFlow,
-    chatQsRef: Ref[IO, Map[ChatId, Queue[IO, Message]]],
+                            wsb: WebSocketBuilder2[IO],
+                            chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
+                            pubSubFlow: PubSubFlow,
+                            chatQsRef: Ref[IO, Map[ChatId, Queue[IO, WebSocketMessage]]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -94,7 +94,7 @@ object ChatServer extends IOApp.Simple {
             _ <- chatHistoryRef
               .updateAndGet(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
               .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
-            chatQ <- Queue.unbounded[IO, Message]
+            chatQ <- Queue.unbounded[IO, WebSocketMessage]
             _ <- chatQsRef
               .updateAndGet(_.updated(chatId, chatQ))
               .flatTap(cache => IO.println(s"ChatQueue cache: $cache"))
@@ -114,7 +114,7 @@ object ChatServer extends IOApp.Simple {
                 println(s"processing ${request.`type`} message")
                 request.args match {
                   // User joins for the first time
-                  case Join(u @ From.User, userId, username, None, None) =>
+                  case Join(u @ ChatParticipant.User, userId, username, None, None) =>
                     for {
                       _ <- IO.println(s"User with userId: $userId is attempting to join the chat server")
                       joined = Joined(u, userId, chatId, None, None)
@@ -128,7 +128,7 @@ object ChatServer extends IOApp.Simple {
                     } yield ()
                   // User re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
-                  case Join(From.User, _, _, Some(_), _) => maybeChatHistory.flatMap(_.fold(queue.offer(ChatExpired(chatId)))(queue.offer))
+                  case Join(ChatParticipant.User, _, _, Some(_), _) => maybeChatHistory.flatMap(_.fold(queue.offer(ChatExpired(chatId)))(queue.offer))
                   // Support joins for the first time
                   case Join(s @ Support, userId, _, None, u @ Some(_)) =>
                     for {

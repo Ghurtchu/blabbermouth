@@ -9,5 +9,5 @@ case class User(
 )
 
 object User {
-  implicit val writesUpdateUserStatus: Writes[User] = Json.writes[User]
+  implicit val wu: Writes[User] = Json.writes[User]
 }
