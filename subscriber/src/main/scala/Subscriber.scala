@@ -9,6 +9,10 @@ import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue, ZRange}
 import fs2.Stream
 import fs2.concurrent.Topic
+import messages.{Message, Request}
+import messages.Request.rr
+import messages.Message.In.{JoinUser, Load}
+import messages.Message.In.codecs._
 import org.http4s.Method.GET
 import org.http4s.dsl.io._
 import org.http4s.ember.server.EmberServerBuilder
@@ -16,6 +20,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import org.http4s.HttpRoutes
 import play.api.libs.json._
+import scala.util.chaining._
 
 import scala.concurrent.duration.DurationInt
 
@@ -23,52 +28,15 @@ import scala.concurrent.duration.DurationInt
   */
 object Subscriber extends IOApp.Simple {
 
+  val redisLocation = "redis://redis"
+
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from("redis://redis").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
-
-  sealed trait Message
-
-  sealed trait In extends Message
-  sealed trait Out extends Message
-
-  implicit val writesOut: Writes[Out] = { case n: NewUser =>
-    writesNewUser.writes(n)
-  }
-
-  case object Load extends In
-  case class JoinUser(userId: String, username: String, chatId: String) extends In
-  implicit val joinUserFmt: Format[JoinUser] = Json.format[JoinUser]
-
-  case class Request(`type`: String, args: Option[In])
-  implicit val readsRequest: Reads[Request] = json =>
-    for {
-      typ <- (json \ "type").validate[String]
-      args <- typ match {
-        case "JoinUser" => joinUserFmt.reads(json("args")).map(Some(_))
-        case "Load"     => JsSuccess(None)
-        case _          => JsError("unrecognized request type")
-      }
-    } yield Request(typ, args)
-
-  // use in Redis PubSub
-  case class NewUser(userId: String, username: String, chatId: String) extends Out
-  implicit val writesNewUser: Writes[NewUser] = Json.writes[NewUser]
-
-  case class Response(args: Out)
-  implicit val writesResponse: Writes[Response] = response => {
-    val `type` = response.args.getClass.getSimpleName
-    JsObject(
-      Map(
-        "type" -> JsString(`type`),
-        "args" -> writesOut.writes(response.args),
-      ),
-    )
-  }
+    RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   override val run = (for {
     flow <- Resource.eval(Topic[IO, Message])
     redisPubSubConnection <- RedisClient[IO]
-      .from("redis://redis")
+      .from(redisLocation)
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
     pubSubStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
     _ <- EmberServerBuilder
@@ -124,14 +92,11 @@ object Subscriber extends IOApp.Simple {
         receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
             println(s"received message: $body")
-            val result = Json
+            Json
               .parse(body)
               .as[Request]
-              .args
-              .getOrElse(Load)
-            println(s"parsed message to: $result")
-
-            result
+              .tap(req => println(s"parsed message to: $req"))
+              .pipe(_.args.getOrElse(Load))
           }),
       )
     }

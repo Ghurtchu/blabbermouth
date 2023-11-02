@@ -40,14 +40,16 @@ object ChatServer extends IOApp.Simple {
   type Flow = EffectfulPipe[WebSocketFrame]
   type PubSubFlow = EffectfulPipe[String]
 
+  val redisLocation = "redis://redis"
+
   def generateRandomId: IO[String] = IO.delay(java.util.UUID.randomUUID().toString.replaceAll("-", ""))
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from("redis://localhost").flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
+    RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
   val run = (for {
     pubSubFlow <- RedisClient[IO]
-      .from("redis://localhost")
+      .from(redisLocation)
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(RedisChannel("joins"))))
     chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
     chatQsRef <- Resource.eval(IO.ref(Map.empty[ChatId, Queue[IO, WebSocketMessage]]))
@@ -79,10 +81,10 @@ object ChatServer extends IOApp.Simple {
   def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get.flatMap(c => IO(c.get(id)))
 
   private def webSocketApp(
-                            wsb: WebSocketBuilder2[IO],
-                            chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
-                            pubSubFlow: PubSubFlow,
-                            chatQsRef: Ref[IO, Map[ChatId, Queue[IO, WebSocketMessage]]],
+    wsb: WebSocketBuilder2[IO],
+    chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
+    pubSubFlow: PubSubFlow,
+    chatQsRef: Ref[IO, Map[ChatId, Queue[IO, WebSocketMessage]]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._

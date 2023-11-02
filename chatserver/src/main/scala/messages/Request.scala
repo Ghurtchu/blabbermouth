@@ -15,7 +15,8 @@ object Request {
       typ <- (json \ "type")
         .validateOpt[String]
         .flatMap(_.fold[JsResult[String]](JsError("`type` is empty"))(JsSuccess(_)))
-      in <- (json \ "args")
+      _ = println(typ)
+      args <- (json \ "args")
         .validateOpt[JsValue]
         .flatMap {
           _.fold[JsResult[In]](JsError("`args` is empty")) { args =>
@@ -26,5 +27,5 @@ object Request {
             }
           }
         }
-    } yield Request(typ, in)
+    } yield Request(typ, args)
 }

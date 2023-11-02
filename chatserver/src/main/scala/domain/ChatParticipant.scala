@@ -5,7 +5,14 @@ import play.api.libs.json._
 sealed trait ChatParticipant {
 
   import ChatParticipant._
-  override def toString: String = this.getClass.getSimpleName.init // drops dollar sign
+
+  /** if the subtype is User returns "User" otherwise returns "Support"
+    *
+    * if the subtype was User then this.getClass.getSimpleName would return "User$"
+    *
+    * so, calling .init in the end drops the dollar sign from "User$" and returns "User"
+    */
+  override def toString: String = this.getClass.getSimpleName.init
 
   def mirror: ChatParticipant = this match {
     case User    => Support
@@ -25,8 +32,7 @@ object ChatParticipant {
   private def toChatParticipant: String => JsResult[ChatParticipant] =
     ChatParticipant
       .fromString(_)
-      .map(JsSuccess(_))
-      .getOrElse(JsError("unrecognized `ChatParticipant` value"))
+      .fold[JsResult[ChatParticipant]](JsError("unrecognized `ChatParticipant`"))(JsSuccess(_))
 
   implicit val wc: Writes[ChatParticipant] = (cp: ChatParticipant) => JsString(cp.toString)
   implicit val rc: Reads[ChatParticipant] = _.validate[String].flatMap(toChatParticipant)
