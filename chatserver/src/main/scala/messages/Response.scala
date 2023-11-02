@@ -3,14 +3,18 @@ package messages
 import messages.Message.Out
 import play.api.libs.json._
 
-case class Response(args: Out)
+case class Response(args: Out) extends AnyVal {
+  def `type`: String = args.getClass.getSimpleName
+}
 
 object Response {
+  import Message.Out.codecs.wo
 
-  import Message.Out.codecs.outFmt
-
-  implicit val writesResponse: Writes[Response] = response => {
-    val `type` = response.args.getClass.getSimpleName
-    JsObject(Map("type" -> JsString(`type`), "args" -> outFmt.writes(response.args)))
-  }
+  implicit val wr: Writes[Response] = (response: Response) =>
+    JsObject(
+      Map(
+        "type" -> JsString(response.`type`),
+        "args" -> wo.writes(response.args),
+      ),
+    )
 }

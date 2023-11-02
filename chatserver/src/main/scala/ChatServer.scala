@@ -1,12 +1,10 @@
 import cats.effect._
 import cats.effect.std.Queue
 import cats.implicits.catsSyntaxOptionId
-import messages.Message
+import messages.{Message, PubSubMessage, Request, Response}
 import messages.Message.Out.codecs._
 import messages.Message.In._
 import messages.Message.Out._
-import messages.Request
-import messages.Response
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.algebra.SortedSetCommands
@@ -75,16 +73,6 @@ object ChatServer extends IOApp.Simple {
       }
     } yield ()).flatMap(_ => IO.sleep(2.minutes)).foreverM.toResource
   } yield ExitCode.Success).useForever
-
-  case class PubSubMessage[A](`type`: String, args: A)
-
-  implicit def writesPubSubMessage[A](implicit w: Writes[A]): Writes[PubSubMessage[A]] = (msg: PubSubMessage[A]) =>
-    JsObject(
-      Map(
-        "type" -> JsString(msg.`type`),
-        "args" -> w.writes(msg.args),
-      ),
-    )
 
   implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json.stringify(Json.toJson(self)) }
   implicit class WebSocketTextSyntax(self: String) { def asText: Text = Text(self) }
