@@ -14,17 +14,17 @@ object WsRequestBody {
     for {
       typ <- (json \ "type")
         .validateOpt[String]
-        .flatMap(_.fold[JsResult[String]](JsError("`type` is empty"))(JsSuccess(_)))
+        .flatMap(_.map(JsSuccess(_)).getOrElse(JsError("`type` is empty")))
       args <- (json \ "args")
         .validateOpt[JsValue]
         .flatMap {
-          _.fold[JsResult[In]](JsError("`args` is empty")) { args =>
+          _.map { args =>
             typ match {
               case "Join"        => implicitly[Reads[Join]] reads args
               case "ChatMessage" => implicitly[Reads[ChatMessage]] reads args
               case _             => JsError("unrecognized `type`")
             }
-          }
+          }.getOrElse(JsError("`args` is empty"))
         }
     } yield WsRequestBody(typ, args)
 }

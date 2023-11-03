@@ -12,13 +12,14 @@ object WsRequestBody {
     for {
       typ <- (json \ "type")
         .validateOpt[String]
-        .flatMap(_.fold[JsResult[String]](JsError("empty `type`"))(JsSuccess(_)))
+        .flatMap(_.map(JsSuccess(_)).getOrElse(JsError("empty `type`")))
       maybeArgs: Option[In] <- (json \ "args")
         .validateOpt[JsValue]
         .flatMap {
           case Some(args) =>
             typ match {
-              case "JoinUser" => (implicitly[Reads[JoinUser]] reads args).map(Some.apply)
+              case "JoinUser" => (implicitly[Reads[JoinUser]] reads args).map(Some(_))
+              case "Load"     => JsError("`Load` should not have `args`")
               case _          => JsError("unrecognized `type`")
             }
           case None if typ == "Load" => JsSuccess(Some(Load))

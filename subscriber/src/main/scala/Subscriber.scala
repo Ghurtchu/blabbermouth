@@ -53,7 +53,7 @@ object Subscriber extends IOApp.Simple {
     flow: Topic[IO, WsMessage],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =
-    HttpRoutes.of[IO] { case GET -> Root / "joins" =>
+    HttpRoutes.of[IO] { case GET -> Root / "users" =>
       wsb.build(
         send = flow
           .subscribe(10)
@@ -63,7 +63,7 @@ object Subscriber extends IOApp.Simple {
                 _ <- IO.println("Loading pending users...")
                 users <- redis.use {
                   _.zRangeByScore[Int]("users", ZRange(0, 0), None)
-                    .map(_.map(WebSocketFrame.Text(_)))
+                    .map(_.reverse.map(WebSocketFrame.Text(_)))
                     .flatTap(u => IO.println(s"Finished loading pending users: $u"))
                     .flatMap(frames => IO(Stream.emits(frames)))
                 }

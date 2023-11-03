@@ -2,10 +2,10 @@
 
 Service oriented architecture with two backends:
 - `ChatServer`:
-  - publishes user join request messages to `users` channel in `Redis pub/sub`
+  - publishes user join requests in `Redis pub/sub`, `users` channel
   - enables `User` and `Support` to exchange messages via chat using `WebSockets`
 - `Subscriber`:
-  - subscribes to `users` channel in `Redis pub/sub` and publishes messages to UI using `WebSockets`
+  - subscribes to `users` channel in `Redis pub/sub` and forwards user join requests to UI using `WebSockets`
 
 Requirements for running the whole project:
 - Docker engine
@@ -50,14 +50,14 @@ Instructions:
         }
     }
     ```
-3) Initiate WebSocket connection for `Support` in `Subscriber` by sending request to: `GET localhost:9001/joins`
+3) Initiate WebSocket connection for `Support` in `Subscriber` by sending request to: `GET localhost:9001/users`
    - always send first WS message for loading pending users, it also subscribes to Redis PubSub and reads newly joined users
      ```json
      {
          "type": "Load"
      }
      ```
-   - Expect one ore more `JSON` WebSocket messages (TODO - consider sending one message with list of users instead of single message for each user):
+   - Expect one re more `JSON` WebSocket messages (TODO - consider sending one message with list of users instead of single message for each user):
      for pending users 
      ```json
      {

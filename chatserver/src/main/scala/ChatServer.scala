@@ -1,6 +1,6 @@
 import cats.effect._
 import cats.effect.std.Queue
-import cats.implicits.catsSyntaxOptionId
+import cats.implicits.{catsSyntaxOptionId, catsSyntaxParallelTraverse1, toTraverseOps}
 import ws.{WsMessage, WsRequestBody, WsResponseBody}
 import ws.WsMessage.Out.codecs._
 import ws.WsMessage.In._
@@ -62,7 +62,7 @@ object ChatServer extends IOApp.Simple {
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
       .withHttpWebSocketApp(webSocketApp(_, chatHistoryRef, pubSubFlow, chatQsRef))
-      .withIdleTimeout(120.seconds)
+      .withIdleTimeout(300.seconds)
       .build
     _ <- (for {
       now <- IO.realTimeInstant.flatTap(now => IO.println(s"Running cache cleanup for ChatHistory: $now"))
@@ -136,12 +136,14 @@ object ChatServer extends IOApp.Simple {
                   // TODO: consider storing chat history in the browser local storage
                   case Join(ChatParticipant.User, _, _, Some(_), _) => maybeChatHistory.flatMap(_.fold(queue.offer(ChatExpired(chatId)))(queue.offer))
                   // Support joins for the first time
-                  case Join(s @ Support, userId, _, None, u @ Some(_)) =>
+                  case Join(s @ Support, userId, username, None, u @ Some(_)) =>
                     for {
                       _ <- IO.println(s"Support attempting to join user with userId: $userId")
                       joined <- generateRandomId.map(id => Joined(s, userId, chatId, Some(id), u))
                       _ <- IO.println(s"Support joined the user with userId: $userId")
-                      _ <- queue offer joined
+                      _ <- List.fill(2)(joined).parTraverse(queue.offer)
+                      pubSubMessage = PubSubMessage[User]("SupportJoined", User(username, userId, chatId)).asJson
+                      _ <- Stream.emit(pubSubMessage).through(pubSubFlow).compile.drain
                     } yield ()
                   // Support re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
@@ -160,7 +162,7 @@ object ChatServer extends IOApp.Simple {
                             .as(msgWithTimestamp)
                         case None => IO.pure(ChatExpired(chatId)).flatTap(ce => IO.println(s"Chat was expired: $ce"))
                       }
-                      _ <- queue.offer(msgWithTimestamp)
+                      _ <- List.fill(2)(msgWithTimestamp).parTraverse(queue.offer)
                     } yield ()
                 }
               }
