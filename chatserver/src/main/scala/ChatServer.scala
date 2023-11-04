@@ -41,7 +41,6 @@ object ChatServer extends IOApp.Simple {
   type EffectfulPipe[A] = Pipe[IO, A, Unit]
   type WebSocketFlow = EffectfulPipe[WebSocketFrame]
   type Publisher = EffectfulPipe[String]
-  type Subscriber = Stream[IO, String]
 
   val redisLocation = "redis://redis"
 
@@ -68,9 +67,6 @@ object ChatServer extends IOApp.Simple {
     publisher <- RedisClient[IO]
       .from(redisLocation)
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(channel)))
-    pubSubConnection <- RedisClient[IO]
-      .from(redisLocation)
-      .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
     chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
     chatTopicRef <- Resource.eval(IO.ref(Map.empty[ChatId, Topic[IO, Option[WsMessage]]]))
     pingPongRef <- Resource.eval(IO.ref(Map.empty[ChatId, PingPong]))
@@ -83,7 +79,7 @@ object ChatServer extends IOApp.Simple {
       .build
     _ <- (for {
       now <- IO.realTimeInstant.flatTap(now => IO.println(s"Running cache cleanup for ChatHistory: $now"))
-      _ <- chatHistoryRef.getAndUpdate {
+      _ <- chatHistoryRef.update {
         _.flatMap { case (userId, chatHistory) =>
           chatHistory.messages.lastOption
             .fold((userId -> chatHistory).some) {
@@ -127,11 +123,11 @@ object ChatServer extends IOApp.Simple {
           for {
             _ <- IO.println(s"Registering $username in the system")
             _ <- chatHistoryRef
-              .updateAndGet(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
+              .update(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
               .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
             topic <- Topic[IO, Option[WsMessage]]
             _ <- chatTopicRef
-              .getAndUpdate(_.updated(chatId, topic))
+              .update(_.updated(chatId, topic))
               .flatTap(cache => IO.println(s"ChatTopics cache: $cache"))
             _ <- IO.println(s"Registered $username in the system")
             response <- Ok(Registered(userId, username, chatId).asJson)
@@ -159,7 +155,7 @@ object ChatServer extends IOApp.Simple {
                 println(s"processing ${request.`type`} message")
                 request.args match {
                   // User joins for the first time
-                  case Join(u @ ChatParticipant.User, userId, username, None, None) =>
+                  case Join(ChatParticipant.User, userId, username, None, None) =>
                     for {
                       _ <- IO.println(s"User with userId: $userId is attempting to join the chat server")
                       user = User(username, userId, chatId)
@@ -174,7 +170,7 @@ object ChatServer extends IOApp.Simple {
                   case Join(ChatParticipant.User, _, _, Some(_), _) =>
                     maybeChatHistory.map(_.getOrElse(ChatExpired(chatId))).map(_.some)
                   // Support joins for the first time
-                  case Join(s @ Support, userId, username, None, Some(su)) =>
+                  case Join(ChatParticipant.Support, userId, username, None, Some(su)) =>
                     for {
                       _ <- IO.println(s"Support attempting to join user with userId: $userId")
                       id <- generateRandomId
@@ -187,7 +183,7 @@ object ChatServer extends IOApp.Simple {
                     } yield None
                   // Support re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
-                  case Join(Support, _, _, Some(_), Some(_)) =>
+                  case Join(ChatParticipant.Support, _, _, Some(_), Some(_)) =>
                     maybeChatHistory.map(_.getOrElse(ChatExpired(chatId))).map(_.some)
                   // chat message either from user or support
                   case msg: ChatMessage =>
@@ -198,7 +194,7 @@ object ChatServer extends IOApp.Simple {
                       _ <- maybeChatHistory.flatMap {
                         case Some(history) =>
                           chatHistoryRef
-                            .updateAndGet(_.updated(chatId, history + msgWithTimestamp))
+                            .update(_.updated(chatId, history + msgWithTimestamp))
                             .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
                             .as(msgWithTimestamp)
                         case None => IO.pure(ChatExpired(chatId)).flatTap(ce => IO.println(s"Chat was expired: $ce"))
@@ -209,17 +205,17 @@ object ChatServer extends IOApp.Simple {
           case None => _ => Stream.empty
         }
 
-        val lazySend = maybeTopic.map(_.fold[Frames](Stream.empty) { topic =>
-          topic
-            .subscribe(10)
-            .collect { case Some(o: Out) => WsResponseBody(o).asJson.asText }
-            .merge {
-              Stream
-                .awakeEvery[IO](5.seconds)
-                .as(WebSocketFrame.Text("ping"))
-            }
-
-        })
+        val lazySend = maybeTopic.map {
+          _.fold[Frames](Stream.empty) {
+            _.subscribe(10)
+              .collect { case Some(o: Out) => WsResponseBody(o).asJson.asText }
+              .merge {
+                Stream
+                  .awakeEvery[IO](4.seconds)
+                  .as(WebSocketFrame.Text("ping"))
+              }
+          }
+        }
 
         val receive: Frames => Stream[IO, Unit] = (frames: Frames) => Stream.eval(lazyReceive).flatMap(_(frames))
         val send: Stream[IO, WebSocketFrame] = Stream.eval(lazySend).flatten
@@ -229,7 +225,7 @@ object ChatServer extends IOApp.Simple {
             for {
               _ <- IO.println("Websocket connection was closed")
               // semantically blocks, to make sure that we received latest pong from user or support
-              _ <- IO.sleep(6.seconds)
+              _ <- IO.sleep(5.seconds)
               topic <- maybeTopic
               maybePingPong <- pingPongRef.get.map(_ get chatId)
               _ <- IO.println(s"PingPong: $maybePingPong")
@@ -255,7 +251,7 @@ object ChatServer extends IOApp.Simple {
     chatId: String,
   ): IO[Unit] = for {
     _ <- IO.println("support has left the chat")
-    _ <- pingPongRef.getAndUpdate(_.updated(chatId, PingPong.empty))
+    _ <- pingPongRef.update(_.updated(chatId, PingPong.empty))
     _ <- topic.traverse_(_.publish1(Out.SupportLeft(chatId).some))
   } yield ()
 
@@ -267,7 +263,7 @@ object ChatServer extends IOApp.Simple {
     publisher: Publisher,
   ): IO[Unit] = for {
     _ <- IO.println("user has left the chat")
-    _ <- pingPongRef.getAndUpdate(_.updated(chatId, PingPong.empty))
+    _ <- pingPongRef.update(_.updated(chatId, PingPong.empty))
     chatHistory <- chatHistoryRef.get.map(_.get(chatId))
     _ <- chatHistory.traverse { case ChatHistory(user: User, _) =>
       for {
