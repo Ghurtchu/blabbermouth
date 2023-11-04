@@ -28,7 +28,7 @@ Instructions:
     }
     ```
 2) Initiate WebSocket connection for `User` in `ChatServer` by sending request to: `GET localhost:9000/chat/{chatId}`
-   - server immediately starts sending `ping` message, UI must respond with: `pong:user` (covers heartbeat functionality)
+   - server immediately starts sending `ping` message for each second, UI must respond with: `pong:user` (covers heartbeat functionality)
    - for requesting to join, send message:
     ```json
     {
@@ -52,7 +52,7 @@ Instructions:
     }
     ```
 3) Initiate WebSocket connection for `Support` in `Subscriber` by sending request to: `GET localhost:9001/users`
-   - server immediately starts sending `ping` message, UI must respond with: `pong:support` (covers heartbeat functionality)
+   - server immediately starts sending `ping` message for each second, UI must respond with: `pong:support` (covers heartbeat functionality)
    - for loading pending users send this WS message, it also subscribes to `Redis PubSub` and reads newly joined users
      ```json
      {
