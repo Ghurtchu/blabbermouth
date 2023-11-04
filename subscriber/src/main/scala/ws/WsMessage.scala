@@ -14,7 +14,7 @@ object WsMessage {
     case class JoinUser(userId: String, username: String, chatId: String) extends In
 
     object codecs {
-      implicit val fj: Format[JoinUser] = Json.format[JoinUser]
+      implicit val fju: Format[JoinUser] = Json.format[JoinUser]
     }
   }
 
@@ -22,9 +22,9 @@ object WsMessage {
     case class NewUser(userId: String, username: String, chatId: String) extends Out
 
     object codecs {
-      implicit val wn: Writes[NewUser] = Json.writes[NewUser]
-      implicit val writesOut: Writes[Out] = { case n: NewUser =>
-        wn.writes(n)
+      implicit val wnu: Writes[NewUser] = Json.writes[NewUser]
+      implicit val wo: Writes[Out] = { case n: NewUser =>
+        wnu writes n
       }
     }
   }

@@ -1,8 +1,7 @@
 package redis
 
+import domain.User
 import play.api.libs.json._
-
-import java.time.Instant
 
 case class PubSubMessage[A](`type`: String, args: A)
 
@@ -15,4 +14,10 @@ object PubSubMessage {
           "args" -> implicitly[Writes[A]].writes(message.args),
         ),
       )
+
+  case class SupportLeft(chatId: String) extends AnyVal
+  implicit val ws: Writes[SupportLeft] = Json.writes[SupportLeft]
+
+  case class UserLeft(user: User) extends AnyVal
+  implicit val wu: Writes[UserLeft] = implicitly[Writes[User]].contramap(_.user)
 }

@@ -28,28 +28,33 @@ import scala.concurrent.duration.DurationInt
   */
 object Subscriber extends IOApp.Simple {
 
+  type PubSubMessage = String
+  type Subscriber = Stream[IO, PubSubMessage]
+
   val redisLocation = "redis://redis"
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
     RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
+
+  val channel = RedisChannel("users")
 
   override val run = (for {
     flow <- Resource.eval(Topic[IO, WsMessage])
     redisPubSubConnection <- RedisClient[IO]
       .from(redisLocation)
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
-    pubSubStream = redisPubSubConnection.subscribe(RedisChannel("joins"))
+    subscriber = redisPubSubConnection.subscribe(channel)
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9001")
-      .withHttpWebSocketApp(webSocketApp(pubSubStream, flow, _).orNotFound)
+      .withHttpWebSocketApp(webSocketApp(subscriber, flow, _).orNotFound)
       .withIdleTimeout(60.minutes)
       .build
 
   } yield ()).useForever
   def webSocketApp(
-    pubSubStream: Stream[IO, String],
+    subscriber: Subscriber,
     flow: Topic[IO, WsMessage],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =
@@ -81,13 +86,13 @@ object Subscriber extends IOApp.Simple {
 
               Stream.eval(response)
           }
-          .through { stream =>
-            pubSubStream
-              .map { message =>
-                println(s"$message was consumed from Redis Pub/Sub")
-                WebSocketFrame.Text(message)
+          .through {
+            subscriber
+              .map { msg =>
+                println(s"$msg was consumed from Redis Pub/Sub")
+                WebSocketFrame.Text(msg)
               }
-              .merge(stream)
+              .merge(_)
           },
         receive = flow.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
