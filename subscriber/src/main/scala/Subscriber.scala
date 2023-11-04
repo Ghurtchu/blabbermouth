@@ -36,7 +36,7 @@ object Subscriber extends IOApp.Simple {
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
     RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
-  val channel = RedisChannel("users")
+  val channel = RedisChannel("joins")
 
   override val run = (for {
     flow <- Resource.eval(Topic[IO, WsMessage])

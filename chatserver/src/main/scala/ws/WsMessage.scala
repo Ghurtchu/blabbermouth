@@ -68,6 +68,8 @@ object WsMessage {
     }
 
     case class ChatExpired(chatId: String) extends Out
+    case class UserLeft(chatId: String) extends Out
+    case class SupportLeft(chatId: String) extends Out
 
     object codecs {
       import WsMessage.codecs._
@@ -76,11 +78,15 @@ object WsMessage {
       implicit val wch: Writes[ChatHistory] = Json.writes[ChatHistory]
       implicit val wr: Writes[Registered] = Json.writes[Registered]
       implicit val rj: Reads[Join] = Json.reads[Join]
+      implicit val wul: Writes[UserLeft] = Json.writes[UserLeft]
+      implicit val wsl: Writes[SupportLeft] = Json.writes[SupportLeft]
       implicit val wo: Writes[Out] = {
         case out: ChatMessage => cmf writes out
         case out: Registered  => wr writes out
         case out: ChatHistory => wch writes out
         case out: ChatExpired => wce writes out
+        case out: UserLeft    => wul writes out
+        case out: SupportLeft => wsl writes out
       }
     }
   }

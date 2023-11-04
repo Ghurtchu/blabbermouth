@@ -15,9 +15,6 @@ object PubSubMessage {
         ),
       )
 
-  case class SupportLeft(chatId: String) extends AnyVal
-  implicit val ws: Writes[SupportLeft] = Json.writes[SupportLeft]
-
   case class UserLeft(user: User) extends AnyVal
   implicit val wu: Writes[UserLeft] = implicitly[Writes[User]].contramap(_.user)
 }
