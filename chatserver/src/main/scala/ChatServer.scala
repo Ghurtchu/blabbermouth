@@ -188,7 +188,7 @@ object ChatServer extends IOApp.Simple {
                       _ <- IO.println(s"Support joined the user with userId: $userId")
                       pubSubMessage = PubSubMessage[domain.Support](
                         "SupportJoinedUser",
-                        domain.Support(id, su, User(userId, username, chatId)),
+                        domain.Support(id, su, User(username, userId, chatId)),
                       ).asJson
                       _ <- Stream.emit(pubSubMessage).through(publisher).compile.drain
                     } yield None

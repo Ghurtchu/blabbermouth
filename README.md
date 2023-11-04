@@ -43,9 +43,9 @@ Instructions:
    - Expect `JSON` response:
     ```json
     {
-        "type": "Joined",
+        "type": "UserJoined",
         "args": {
-            "participant": "User",
+            "username": "Nika",
             "userId": "9d6d2db0cdb84d8ba67105670d94d641",
             "chatId": "d2464b5386044daf9e36ffd414260f67"
         }
@@ -117,13 +117,14 @@ Instructions:
   - Expect `JSON` response:
     ```json
     {
-        "type": "Joined",
+        "type": "SupportJoinedUser",
         "args": {
-            "participant": "Support",
-            "userId": "9d6d2db0cdb84d8ba67105670d94d641",
-            "supportId": "7c270542e64a4dfbb2bc1c7793746674",
-            "supportUserName": "Vika"
-          }
+            "supportId": "1939d1c378ea45809521c16668c21c10",
+            "supportUserName": "Kiku",
+            "username": "f3eb5276f29c4971827d31acd12327a7",
+            "userId": "Gela",
+            "chatId": "91a68f25d5e5444aaaa5dc47ebf7d893"
+        }
     }
     ```
 5) Send chat message to `Support` from `User` by sending the following WebSocket text message on the opened WS connection:
