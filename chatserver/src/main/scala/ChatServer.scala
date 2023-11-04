@@ -74,13 +74,13 @@ object ChatServer extends IOApp.Simple {
       .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
     subscriber = pubSubConnection.subscribe(channel)
     chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
-    chatTopicsRef <- Resource.eval(IO.ref(Map.empty[ChatId, Topic[IO, Option[WsMessage]]]))
-    pingPongsRef <- Resource.eval(IO.ref(Map.empty[ChatId, PingPong]))
+    chatTopicRef <- Resource.eval(IO.ref(Map.empty[ChatId, Topic[IO, Option[WsMessage]]]))
+    pingPongRef <- Resource.eval(IO.ref(Map.empty[ChatId, PingPong]))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, chatHistoryRef, publisher, pingPongsRef, subscriber, chatTopicsRef))
+      .withHttpWebSocketApp(webSocketApp(_, chatHistoryRef, publisher, pingPongRef, subscriber, chatTopicRef))
       .withIdleTimeout(300.seconds)
       .build
     _ <- (for {
@@ -124,7 +124,7 @@ object ChatServer extends IOApp.Simple {
     publisher: Publisher,
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     subscriber: Subscriber,
-    chatTopicsRef: Ref[IO, Map[ChatId, Topic[IO, Option[WsMessage]]]],
+    chatTopicRef: Ref[IO, Map[ChatId, Topic[IO, Option[WsMessage]]]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -137,7 +137,7 @@ object ChatServer extends IOApp.Simple {
               .updateAndGet(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
               .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
             topic <- Topic[IO, Option[WsMessage]]
-            _ <- chatTopicsRef
+            _ <- chatTopicRef
               .getAndUpdate(_.updated(chatId, topic))
               .flatTap(cache => IO.println(s"ChatTopics cache: $cache"))
             _ <- IO.println(s"Registered $username in the system")
@@ -146,7 +146,7 @@ object ChatServer extends IOApp.Simple {
         }
       case GET -> Root / "chat" / chatId =>
         val maybeChatHistory = findById(chatHistoryRef)(chatId)
-        val maybeTopic = findById(chatTopicsRef)(chatId)
+        val maybeTopic = findById(chatTopicRef)(chatId)
 
         val lazyReceive: IO[WebSocketFlow] = maybeTopic.map {
           case Some(topic) =>
@@ -263,41 +263,41 @@ object ChatServer extends IOApp.Simple {
   }.orNotFound
 
   private def supportLeftChat(
-    joins: Publisher,
-    heartBeatsRef: Ref[IO, Map[ChatId, PingPong]],
+    publisher: Publisher,
+    pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: String,
   ): IO[Unit] =
     for {
       _ <- IO.println("support has left the chat")
-      _ <- heartBeatsRef.getAndUpdate(_.updated(chatId, PingPong.empty))
-      _ <- publishMsgToRedisPubSub[SupportLeft](SupportLeft(chatId), joins)
+      _ <- pingPongRef.getAndUpdate(_.updated(chatId, PingPong.empty))
+      _ <- publishMsgToRedisPubSub[SupportLeft](SupportLeft(chatId), publisher)
     } yield ()
 
   private def userLeftChat(
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
-    heartBeatsRef: Ref[IO, Map[ChatId, PingPong]],
+    pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: String,
-    joins: Publisher,
+    publisher: Publisher,
   ): IO[Unit] =
     for {
       _ <- IO.println("user has left the chat")
-      _ <- heartBeatsRef.getAndUpdate(_.updated(chatId, PingPong.empty))
+      _ <- pingPongRef.getAndUpdate(_.updated(chatId, PingPong.empty))
       chatHistory <- chatHistoryRef.get.map(_.get(chatId))
       _ <- chatHistory.traverse { case ChatHistory(user: User, _) =>
         for {
           _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(1), user.asJson)))
-          _ <- publishMsgToRedisPubSub[UserLeft](UserLeft(user), joins)
+          _ <- publishMsgToRedisPubSub[UserLeft](UserLeft(user), publisher)
         } yield ()
       }
     } yield ()
 
   private def publishMsgToRedisPubSub[A: Writes](
     message: A,
-    pubSubFlow: Publisher,
+    publisher: Publisher,
   ): IO[Unit] =
     IO.println(s"${message.getClass.getSimpleName} left the chat: $message") *> Stream
       .emit(PubSubMessage[A](message.getClass.getSimpleName, message).asJson)
-      .through(pubSubFlow)
+      .through(publisher)
       .compile
       .drain
 }
