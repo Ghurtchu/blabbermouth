@@ -36,31 +36,41 @@ object Subscriber extends IOApp.Simple {
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
     RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
 
-  val channel = RedisChannel("joins")
+  private def mkTopic[A]: Resource[IO, Topic[IO, A]] =
+    Resource.eval(Topic[IO, A])
+
+  private def mkRedis(redisLocation: String): Resource[IO, RedisClient] =
+    RedisClient[IO].from(redisLocation)
+
+  private def mkSubscriber(
+    redis: RedisClient,
+    channel: RedisChannel[String],
+  ): Resource[IO, Subscriber] =
+    PubSub
+      .mkPubSubConnection[IO, String, String](redis, RedisCodec.Utf8)
+      .map(_ subscribe channel)
 
   override val run = (for {
-    flow <- Resource.eval(Topic[IO, WsMessage])
-    redisPubSubConnection <- RedisClient[IO]
-      .from(redisLocation)
-      .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8))
-    subscriber = redisPubSubConnection.subscribe(channel)
+    topic <- mkTopic[WsMessage]
+    redis <- mkRedis("redis://redis")
+    subscriber <- mkSubscriber(redis, RedisChannel("joins"))
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9001")
-      .withHttpWebSocketApp(webSocketApp(subscriber, flow, _).orNotFound)
+      .withHttpWebSocketApp(webSocketApp(subscriber, topic, _).orNotFound)
       .withIdleTimeout(60.minutes)
       .build
 
   } yield ()).useForever
   def webSocketApp(
     subscriber: Subscriber,
-    flow: Topic[IO, WsMessage],
+    topic: Topic[IO, WsMessage],
     wsb: WebSocketBuilder2[IO],
   ): HttpRoutes[IO] =
     HttpRoutes.of[IO] { case GET -> Root / "users" =>
       wsb.build(
-        send = flow
+        send = topic
           .subscribe(10)
           .flatMap {
             case Load =>
@@ -86,15 +96,14 @@ object Subscriber extends IOApp.Simple {
 
               Stream.eval(response)
           }
-          .through {
+          .merge {
             subscriber
               .map { msg =>
                 println(s"$msg was consumed from Redis Pub/Sub")
                 WebSocketFrame.Text(msg)
               }
-              .merge(_)
           },
-        receive = flow.publish
+        receive = topic.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
             println(s"received message: $body")
             Json

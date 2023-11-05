@@ -1,5 +1,6 @@
+import cats.MonadThrow
 import cats.effect._
-import cats.implicits.{catsSyntaxOptionId, toFoldableOps, toTraverseOps}
+import cats.implicits.{catsSyntaxOptionId, catsSyntaxTuple2Semigroupal, toFoldableOps, toTraverseOps}
 import ws.{WsMessage, WsRequestBody, WsResponseBody}
 import ws.WsMessage.Out.codecs._
 import ws.WsMessage.In._
@@ -10,6 +11,7 @@ import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
+import dev.profunktor.redis4cats.effect.MkRedis
 import dev.profunktor.redis4cats.effects._
 import fs2.{Pipe, Stream}
 import org.http4s.dsl.Http4sDsl
@@ -19,6 +21,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
+import dev.profunktor.redis4cats.tx.TxStore
 import domain.ChatParticipant._
 import domain.{ChatParticipant, User}
 import fs2.concurrent.Topic
@@ -28,19 +31,19 @@ import redis.PubSubMessage
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import scala.concurrent.duration.DurationInt
+import scala.Option.when
+import scala.concurrent.duration.{DurationInt, FiniteDuration}
 
 /**   - publishes Join message to Redis pub/sub
   *   - serves chat functionality via WebSockets
   */
 object ChatServer extends IOApp.Simple {
 
-  type UserId = String
-  type ChatId = String
-  type Frames = Stream[IO, WebSocketFrame]
-  type EffectfulPipe[A] = Pipe[IO, A, Unit]
-  type WebSocketFlow = EffectfulPipe[WebSocketFrame]
-  type Publisher = EffectfulPipe[String]
+  private type UserId = String
+  private type ChatId = String
+  private type WebSocketFrames = Stream[IO, WebSocketFrame]
+  private type WebSocketFlow = Pipe[IO, WebSocketFrame, Unit]
+  private type Publisher = Pipe[IO, String, Unit]
 
   val redisLocation = "redis://redis"
 
@@ -51,65 +54,93 @@ object ChatServer extends IOApp.Simple {
       .replaceAll("-", "")
   }
 
-  val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO]
-      .from(redisLocation)
-      .flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
-
-  val channel = RedisChannel("joins")
-
-  private case class PingPong(userTimeStamp: Option[Instant], supportTimestamp: Option[Instant])
+  private case class PingPong(
+    userTimeStamp: Option[Instant],
+    supportTimestamp: Option[Instant],
+  )
   private object PingPong {
     def empty: PingPong = new PingPong(None, None)
   }
 
-  val run = (for {
-    publisher <- RedisClient[IO]
-      .from(redisLocation)
-      .flatMap(PubSub.mkPubSubConnection[IO, String, String](_, RedisCodec.Utf8).map(_.publish(channel)))
-    chatHistoryRef <- Resource.eval(IO.ref(Map.empty[UserId, ChatHistory]))
-    chatTopicRef <- Resource.eval(IO.ref(Map.empty[ChatId, Topic[IO, Option[WsMessage]]]))
-    pingPongRef <- Resource.eval(IO.ref(Map.empty[ChatId, PingPong]))
-    _ <- EmberServerBuilder
-      .default[IO]
-      .withHost(host"0.0.0.0")
-      .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, chatHistoryRef, publisher, pingPongRef, chatTopicRef))
-      .withIdleTimeout(300.seconds)
-      .build
-    _ <- (for {
-      now <- IO.realTimeInstant.flatTap(now => IO.println(s"Running cache cleanup for ChatHistory: $now"))
+  private def mkPublisher(
+    redis: RedisClient,
+    channel: RedisChannel[String],
+  ): Resource[IO, Publisher] =
+    PubSub
+      .mkPubSubConnection[IO, String, String](
+        redis,
+        RedisCodec.Utf8,
+      )
+      .map(_ publish channel)
+
+  private def mkSortedSetCommandsClient(
+    redis: RedisClient,
+  ): Resource[IO, SortedSetCommands[IO, String, String]] =
+    Redis[IO]
+      .fromClient(
+        redis,
+        RedisCodec.Utf8,
+      )
+
+  private def mkRef[K, V]: Resource[IO, Ref[IO, Map[K, V]]] =
+    Resource.eval(IO.ref(Map.empty[K, V]))
+  private def mkRedisClient(redisLocation: String): Resource[IO, RedisClient] =
+    RedisClient[IO] from redisLocation
+
+  private def runCacheCleanupPeriodically(
+    chatHistoryRef: Ref[IO, Map[UserId, ChatHistory]],
+    duration: FiniteDuration,
+  ): Resource[IO, Nothing] =
+    (for {
+      now <- IO.realTimeInstant
+      _ <- IO.println(s"Running cache cleanup for ChatHistory: $now")
       _ <- chatHistoryRef.update {
         _.flatMap { case (userId, chatHistory) =>
           chatHistory.messages.lastOption
             .fold((userId -> chatHistory).some) {
               _.timestamp.flatMap { timestamp =>
                 val diffInMinutes = ChronoUnit.MINUTES.between(timestamp, now)
-                Option.when(diffInMinutes < 2L)(userId -> chatHistory)
+                when(diffInMinutes < 2L)(userId -> chatHistory)
               }
             }
         }
       }
-    } yield ()).flatMap(_ => IO.sleep(2.minutes)).foreverM.toResource
+    } yield ())
+      .flatMap(_ => IO.sleep(duration))
+      .foreverM
+      .toResource
+
+  val run = (for {
+    redisClient <- mkRedisClient(redisLocation)
+    publisher <- mkPublisher(redisClient, RedisChannel("joins"))
+    redisCmdClient <- mkSortedSetCommandsClient(redisClient)
+    chatHistoryRef <- mkRef[UserId, ChatHistory]
+    chatTopicRef <- mkRef[ChatId, Topic[IO, Option[WsMessage]]]
+    pingPongRef <- mkRef[ChatId, PingPong]
+    _ <- EmberServerBuilder
+      .default[IO]
+      .withHost(host"0.0.0.0")
+      .withPort(port"9000")
+      .withHttpWebSocketApp(webSocketApp(_, redisCmdClient, chatHistoryRef, publisher, pingPongRef, chatTopicRef))
+      .withIdleTimeout(300.seconds)
+      .build
+    _ <- runCacheCleanupPeriodically(chatHistoryRef, 2.minutes)
   } yield ExitCode.Success).useForever
 
-  implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json.stringify(Json.toJson(self)) }
+  implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json stringify (Json toJson self) }
   implicit class WebSocketTextSyntax(self: String) { def asText: Text = Text(self) }
-  def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get map (_ get id)
+  private def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get map (_ get id)
   private def updatePingPongRef(
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: ChatId,
     update: PingPong => PingPong,
-    default: PingPong,
-  ): IO[Unit] = pingPongRef.update {
-    _.updatedWith(chatId) {
-      case Some(pp) => Some(update(pp))
-      case None     => Some(default)
-    }
-  }
+    initial: PingPong,
+  ): IO[Unit] =
+    pingPongRef.update(_.updatedWith(chatId)(_.map(update).getOrElse(initial).some))
 
   private def webSocketApp(
     wsb: WebSocketBuilder2[IO],
+    redisCmdClient: SortedSetCommands[IO, String, String],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     publisher: Publisher,
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
@@ -119,7 +150,10 @@ object ChatServer extends IOApp.Simple {
     import dsl._
     HttpRoutes.of[IO] {
       case GET -> Root / "user" / "join" / username =>
-        IO.both(generateRandomId, generateRandomId).flatMap { case (userId, chatId) =>
+        (
+          generateRandomId,
+          generateRandomId,
+        ).flatMapN { case (userId, chatId) =>
           for {
             _ <- IO.println(s"Registering $username in the system")
             _ <- chatHistoryRef
@@ -143,17 +177,27 @@ object ChatServer extends IOApp.Simple {
               case Text("pong:user", _) =>
                 for {
                   now <- IO.realTimeInstant
-                  _ <- updatePingPongRef(pingPongRef, chatId, _.copy(userTimeStamp = now.some), PingPong(now.some, None))
+                  _ <- updatePingPongRef(
+                    pingPongRef,
+                    chatId,
+                    _.copy(userTimeStamp = now.some),
+                    PingPong(now.some, None),
+                  )
                 } yield None
               case Text("pong:support", _) =>
                 for {
                   now <- IO.realTimeInstant
-                  _ <- updatePingPongRef(pingPongRef, chatId, _.copy(supportTimestamp = now.some), PingPong(None, now.some))
+                  _ <- updatePingPongRef(
+                    pingPongRef,
+                    chatId,
+                    _.copy(supportTimestamp = now.some),
+                    PingPong(None, now.some),
+                  )
                 } yield None
-              case Text(body, _) =>
-                val request = Json.parse(body).as[WsRequestBody]
-                println(s"processing ${request.`type`} message")
-                request.args match {
+              case Text(msg, _) =>
+                val body = Json.parse(msg).as[WsRequestBody]
+                println(s"processing ${body.`type`} message")
+                body.args match {
                   // User joins for the first time
                   case Join(ChatParticipant.User, userId, username, None, None) =>
                     for {
@@ -161,10 +205,10 @@ object ChatServer extends IOApp.Simple {
                       user = User(username, userId, chatId)
                       pubSubMsgAsJson = PubSubMessage[User]("UserJoined", user).asJson
                       _ <- IO.println(s"Writing $user into Redis SortedSet with Score 0 - pending")
-                      _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(0), user.asJson)))
+                      _ <- redisCmdClient.zAdd("users", None, ScoreWithValue(Score(0), user.asJson))
                       _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")
                       _ <- Stream.emit(pubSubMsgAsJson).through(publisher).compile.drain
-                    } yield None
+                    } yield UserJoined(user).some
                   // User re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
                   case Join(ChatParticipant.User, _, _, Some(_), _) =>
@@ -174,13 +218,11 @@ object ChatServer extends IOApp.Simple {
                     for {
                       _ <- IO.println(s"Support attempting to join user with userId: $userId")
                       id <- generateRandomId
-                      _ <- IO.println(s"Support joined the user with userId: $userId")
-                      pubSubMessage = PubSubMessage[domain.Support](
-                        "SupportJoinedUser",
-                        domain.Support(id, su, User(username, userId, chatId)),
-                      ).asJson
+                      support = domain.Support(id, su, User(username, userId, chatId))
+                      pubSubMessage = PubSubMessage[domain.Support]("SupportJoinedUser", support).asJson
                       _ <- Stream.emit(pubSubMessage).through(publisher).compile.drain
-                    } yield None
+                      _ <- IO.println(s"Support joined the user with userId: $userId")
+                    } yield SupportJoined(support).some
                   // Support re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
                   case Join(ChatParticipant.Support, _, _, Some(_), Some(_)) =>
@@ -190,23 +232,23 @@ object ChatServer extends IOApp.Simple {
                     for {
                       now <- IO.realTimeInstant
                       _ <- IO.println(s"participant:${msg.from} sent message:${msg.content} to:${msg.from.mirror} at:$now")
-                      msgWithTimestamp = msg.copy(timestamp = Some(now))
+                      newMessage = msg.copy(timestamp = Some(now))
                       _ <- maybeChatHistory.flatMap {
-                        case Some(history) =>
+                        case Some(messages) =>
                           chatHistoryRef
-                            .update(_.updated(chatId, history + msgWithTimestamp))
+                            .update(_.updated(chatId, messages + newMessage))
                             .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
-                            .as(msgWithTimestamp)
-                        case None => IO.pure(ChatExpired(chatId)).flatTap(ce => IO.println(s"Chat was expired: $ce"))
+                            .as(newMessage)
+                        case None => IO.pure(ChatExpired(chatId))
                       }
-                    } yield msgWithTimestamp.some
+                    } yield newMessage.some
                 }
             })
-          case None => _ => Stream.empty
+          case None => (_: WebSocketFrames) => Stream.empty
         }
 
         val lazySend = maybeTopic.map {
-          _.fold[Frames](Stream.empty) {
+          _.fold[WebSocketFrames](Stream.empty) {
             _.subscribe(10)
               .collect { case Some(o: Out) => WsResponseBody(o).asJson.asText }
               .merge {
@@ -217,7 +259,7 @@ object ChatServer extends IOApp.Simple {
           }
         }
 
-        val receive: Frames => Stream[IO, Unit] = (frames: Frames) => Stream.eval(lazyReceive).flatMap(_(frames))
+        val receive: WebSocketFrames => Stream[IO, Unit] = (frames: WebSocketFrames) => Stream.eval(lazyReceive).flatMap(_(frames))
         val send: Stream[IO, WebSocketFrame] = Stream.eval(lazySend).flatten
 
         wsb
@@ -232,11 +274,11 @@ object ChatServer extends IOApp.Simple {
               _ <- maybePingPong.traverse {
                 case PingPong(Some(userTimeStamp), Some(supportTimestamp)) =>
                   if (userTimeStamp.isBefore(supportTimestamp))
-                    userLeftChat(chatHistoryRef, pingPongRef, chatId, topic, publisher)
+                    userLeftChat(redisCmdClient, chatHistoryRef, pingPongRef, chatId, topic, publisher)
                   else
                     supportLeftChat(topic, pingPongRef, chatId)
                 case PingPong(Some(_), _) => supportLeftChat(topic, pingPongRef, chatId)
-                case PingPong(_, Some(_)) => userLeftChat(chatHistoryRef, pingPongRef, chatId, topic, publisher)
+                case PingPong(_, Some(_)) => userLeftChat(redisCmdClient, chatHistoryRef, pingPongRef, chatId, topic, publisher)
                 case _                    => IO.unit
               }
             } yield ()
@@ -256,6 +298,7 @@ object ChatServer extends IOApp.Simple {
   } yield ()
 
   private def userLeftChat(
+    redisCmdClient: SortedSetCommands[IO, String, String],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: String,
@@ -267,7 +310,7 @@ object ChatServer extends IOApp.Simple {
     chatHistory <- chatHistoryRef.get.map(_.get(chatId))
     _ <- chatHistory.traverse { case ChatHistory(user: User, _) =>
       for {
-        _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(1), user.asJson)))
+        _ <- redisCmdClient.zAdd("users", None, ScoreWithValue(Score(1), user.asJson))
         _ <- topic.traverse_(_.publish1(Out.UserLeft(chatId).some))
         _ <- publishMsgToRedisPubSub[PubSubMessage.UserLeft](PubSubMessage.UserLeft(user), publisher)
       } yield ()
