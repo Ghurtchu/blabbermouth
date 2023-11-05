@@ -125,11 +125,21 @@ object ChatServer extends IOApp.Simple {
     _ <- runCacheCleanupPeriodically(chatHistoryRef, 2.minutes)
   } yield ExitCode.Success).useForever
 
-  implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json stringify (Json toJson self) }
+  implicit class JsonWritesSyntax[A: Writes](self: A) {
 
-  implicit class WebSocketTextSyntax(self: String) { def asText: Text = Text(self) }
+    def asJson: String = Json stringify (Json toJson self)
+  }
 
-  private def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get map (_ get id)
+  implicit class JsonReadsSyntax(self: String) {
+    def fromJson[A: Reads]: A = Json.parse(self).as[A]
+  }
+
+  implicit class WebSocketTextSyntax(self: String) {
+    def asText: Text = Text(self)
+  }
+
+  private def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] =
+    cache.get map (_ get id)
 
   private def updatePingPongRef(
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
@@ -174,29 +184,27 @@ object ChatServer extends IOApp.Simple {
 
         val lazyReceive: IO[WebSocketFrameFlow] = maybeTopic.map {
           case Some(topic) =>
-            topic.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap {
+            topic.publish.compose[WebSocketFrames](_.evalMap {
               case Text("pong:user", _) =>
-                for {
-                  now <- IO.realTimeInstant
-                  _ <- updatePingPongRef(
+                IO.realTimeInstant.flatMap(now =>
+                  updatePingPongRef(
                     pingPongRef,
                     chatId,
                     _.copy(userTimeStamp = now.some),
                     PingPong(now.some, None),
-                  )
-                } yield Pong
+                  ) as Pong,
+                )
               case Text("pong:support", _) =>
-                for {
-                  now <- IO.realTimeInstant
-                  _ <- updatePingPongRef(
+                IO.realTimeInstant.flatMap(now =>
+                  updatePingPongRef(
                     pingPongRef,
                     chatId,
                     _.copy(supportTimestamp = now.some),
                     PingPong(None, now.some),
-                  )
-                } yield Pong
+                  ) as Pong,
+                )
               case Text(body, _) =>
-                val msg = Json.parse(body).as[WsRequestBody]
+                val msg = body.fromJson[WsRequestBody]
                 println(s"processing ${msg.`type`} message")
                 msg.args match {
                   // User joins for the first time
@@ -275,11 +283,11 @@ object ChatServer extends IOApp.Simple {
               _ <- maybePingPong.traverse {
                 case PingPong(Some(userTimeStamp), Some(supportTimestamp)) =>
                   if (userTimeStamp.isBefore(supportTimestamp))
-                    userLeftChat(redisCmdClient, chatHistoryRef, pingPongRef, chatId, topic, publisher)
+                    userLeftChat(redisCmdClient, chatHistoryRef, chatId, topic, publisher)
                   else
-                    supportLeftChat(topic, pingPongRef, chatId)
-                case PingPong(Some(_), _) => supportLeftChat(topic, pingPongRef, chatId)
-                case PingPong(_, Some(_)) => userLeftChat(redisCmdClient, chatHistoryRef, pingPongRef, chatId, topic, publisher)
+                    supportLeftChat(topic, chatId)
+                case PingPong(Some(_), _) => supportLeftChat(topic, chatId)
+                case PingPong(_, Some(_)) => userLeftChat(redisCmdClient, chatHistoryRef, chatId, topic, publisher)
                 case _                    => IO.unit
               }
             } yield ()
@@ -290,7 +298,6 @@ object ChatServer extends IOApp.Simple {
 
   private def supportLeftChat(
     topic: Option[Topic[IO, Message]],
-    pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: String,
   ): IO[Unit] = for {
     _ <- IO.println("support has left the chat")
@@ -300,7 +307,6 @@ object ChatServer extends IOApp.Simple {
   private def userLeftChat(
     redisCmdClient: SortedSetCommands[IO, String, String],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
-    pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: ChatId,
     topic: Option[Topic[IO, Message]],
     publisher: Publisher,
