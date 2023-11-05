@@ -1,17 +1,15 @@
-import cats.MonadThrow
 import cats.effect._
 import cats.implicits.{catsSyntaxOptionId, catsSyntaxTuple2Semigroupal, toFoldableOps, toTraverseOps}
-import ws.{WsMessage, WsRequestBody, WsResponseBody}
-import ws.WsMessage.Out.codecs._
-import ws.WsMessage.In._
-import ws.WsMessage.Out._
+import ws.{Message, WsRequestBody, WsResponseBody}
+import ws.Message.Out.codecs._
+import ws.Message.In._
+import ws.Message.Out._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import dev.profunktor.redis4cats.effect.MkRedis
 import dev.profunktor.redis4cats.effects._
 import fs2.{Pipe, Stream}
 import org.http4s.dsl.Http4sDsl
@@ -21,11 +19,9 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
-import dev.profunktor.redis4cats.tx.TxStore
-import domain.ChatParticipant._
 import domain.{ChatParticipant, User}
 import fs2.concurrent.Topic
-import ws.WsMessage._
+import ws.Message._
 import org.http4s.websocket.WebSocketFrame.Text
 import redis.PubSubMessage
 
@@ -42,8 +38,9 @@ object ChatServer extends IOApp.Simple {
   private type UserId = String
   private type ChatId = String
   private type WebSocketFrames = Stream[IO, WebSocketFrame]
-  private type WebSocketFlow = Pipe[IO, WebSocketFrame, Unit]
-  private type Publisher = Pipe[IO, String, Unit]
+  private type Flow[A] = Pipe[IO, A, Unit]
+  private type WebSocketFrameFlow = Flow[WebSocketFrame]
+  private type Publisher = Flow[String]
 
   val redisLocation = "redis://redis"
 
@@ -84,6 +81,7 @@ object ChatServer extends IOApp.Simple {
 
   private def mkRef[K, V]: Resource[IO, Ref[IO, Map[K, V]]] =
     Resource.eval(IO.ref(Map.empty[K, V]))
+
   private def mkRedisClient(redisLocation: String): Resource[IO, RedisClient] =
     RedisClient[IO] from redisLocation
 
@@ -115,7 +113,7 @@ object ChatServer extends IOApp.Simple {
     publisher <- mkPublisher(redisClient, RedisChannel("joins"))
     redisCmdClient <- mkSortedSetCommandsClient(redisClient)
     chatHistoryRef <- mkRef[UserId, ChatHistory]
-    chatTopicRef <- mkRef[ChatId, Topic[IO, Option[WsMessage]]]
+    chatTopicRef <- mkRef[ChatId, Topic[IO, Message]]
     pingPongRef <- mkRef[ChatId, PingPong]
     _ <- EmberServerBuilder
       .default[IO]
@@ -128,8 +126,11 @@ object ChatServer extends IOApp.Simple {
   } yield ExitCode.Success).useForever
 
   implicit class JsonSyntax[A: Writes](self: A) { def asJson: String = Json stringify (Json toJson self) }
+
   implicit class WebSocketTextSyntax(self: String) { def asText: Text = Text(self) }
+
   private def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] = cache.get map (_ get id)
+
   private def updatePingPongRef(
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: ChatId,
@@ -144,7 +145,7 @@ object ChatServer extends IOApp.Simple {
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     publisher: Publisher,
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
-    chatTopicRef: Ref[IO, Map[ChatId, Topic[IO, Option[WsMessage]]]],
+    chatTopicRef: Ref[IO, Map[ChatId, Topic[IO, Message]]],
   ): HttpApp[IO] = {
     val dsl = new Http4sDsl[IO] {}
     import dsl._
@@ -159,7 +160,7 @@ object ChatServer extends IOApp.Simple {
             _ <- chatHistoryRef
               .update(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
               .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
-            topic <- Topic[IO, Option[WsMessage]]
+            topic <- Topic[IO, Message]
             _ <- chatTopicRef
               .update(_.updated(chatId, topic))
               .flatTap(cache => IO.println(s"ChatTopics cache: $cache"))
@@ -171,7 +172,7 @@ object ChatServer extends IOApp.Simple {
         val maybeChatHistory = findById(chatHistoryRef)(chatId)
         val maybeTopic = findById(chatTopicRef)(chatId)
 
-        val lazyReceive: IO[WebSocketFlow] = maybeTopic.map {
+        val lazyReceive: IO[WebSocketFrameFlow] = maybeTopic.map {
           case Some(topic) =>
             topic.publish.compose[Stream[IO, WebSocketFrame]](_.evalMap {
               case Text("pong:user", _) =>
@@ -183,7 +184,7 @@ object ChatServer extends IOApp.Simple {
                     _.copy(userTimeStamp = now.some),
                     PingPong(now.some, None),
                   )
-                } yield None
+                } yield Pong
               case Text("pong:support", _) =>
                 for {
                   now <- IO.realTimeInstant
@@ -193,11 +194,11 @@ object ChatServer extends IOApp.Simple {
                     _.copy(supportTimestamp = now.some),
                     PingPong(None, now.some),
                   )
-                } yield None
-              case Text(msg, _) =>
-                val body = Json.parse(msg).as[WsRequestBody]
-                println(s"processing ${body.`type`} message")
-                body.args match {
+                } yield Pong
+              case Text(body, _) =>
+                val msg = Json.parse(body).as[WsRequestBody]
+                println(s"processing ${msg.`type`} message")
+                msg.args match {
                   // User joins for the first time
                   case Join(ChatParticipant.User, userId, username, None, None) =>
                     for {
@@ -208,11 +209,11 @@ object ChatServer extends IOApp.Simple {
                       _ <- redisCmdClient.zAdd("users", None, ScoreWithValue(Score(0), user.asJson))
                       _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")
                       _ <- Stream.emit(pubSubMsgAsJson).through(publisher).compile.drain
-                    } yield UserJoined(user).some
+                    } yield UserJoined(user)
                   // User re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
                   case Join(ChatParticipant.User, _, _, Some(_), _) =>
-                    maybeChatHistory.map(_.getOrElse(ChatExpired(chatId))).map(_.some)
+                    maybeChatHistory.map(_.getOrElse(ChatExpired(chatId)))
                   // Support joins for the first time
                   case Join(ChatParticipant.Support, userId, username, None, Some(su)) =>
                     for {
@@ -222,11 +223,11 @@ object ChatServer extends IOApp.Simple {
                       pubSubMessage = PubSubMessage[domain.Support]("SupportJoinedUser", support).asJson
                       _ <- Stream.emit(pubSubMessage).through(publisher).compile.drain
                       _ <- IO.println(s"Support joined the user with userId: $userId")
-                    } yield SupportJoined(support).some
+                    } yield SupportJoined(support)
                   // Support re-joins (browser refresh), so we load chat history
                   // TODO: consider storing chat history in the browser local storage
                   case Join(ChatParticipant.Support, _, _, Some(_), Some(_)) =>
-                    maybeChatHistory.map(_.getOrElse(ChatExpired(chatId))).map(_.some)
+                    maybeChatHistory.map(_.getOrElse(ChatExpired(chatId)))
                   // chat message either from user or support
                   case msg: ChatMessage =>
                     for {
@@ -241,20 +242,20 @@ object ChatServer extends IOApp.Simple {
                             .as(newMessage)
                         case None => IO.pure(ChatExpired(chatId))
                       }
-                    } yield newMessage.some
+                    } yield newMessage
                 }
             })
-          case None => (_: WebSocketFrames) => Stream.empty
+          case None => _ => Stream.empty
         }
 
         val lazySend = maybeTopic.map {
           _.fold[WebSocketFrames](Stream.empty) {
             _.subscribe(10)
-              .collect { case Some(o: Out) => WsResponseBody(o).asJson.asText }
+              .collect { case o: Out => WsResponseBody(o).asJson.asText }
               .merge {
                 Stream
                   .awakeEvery[IO](4.seconds)
-                  .as(WebSocketFrame.Text("ping"))
+                  .as("ping".asText)
               }
           }
         }
@@ -288,30 +289,28 @@ object ChatServer extends IOApp.Simple {
   }.orNotFound
 
   private def supportLeftChat(
-    topic: Option[Topic[IO, Option[WsMessage]]],
+    topic: Option[Topic[IO, Message]],
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: String,
   ): IO[Unit] = for {
     _ <- IO.println("support has left the chat")
-    _ <- pingPongRef.update(_.updated(chatId, PingPong.empty))
-    _ <- topic.traverse_(_.publish1(Out.SupportLeft(chatId).some))
+    _ <- topic.traverse_(_.publish1(Out.SupportLeft(chatId)))
   } yield ()
 
   private def userLeftChat(
     redisCmdClient: SortedSetCommands[IO, String, String],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
-    chatId: String,
-    topic: Option[Topic[IO, Option[WsMessage]]],
+    chatId: ChatId,
+    topic: Option[Topic[IO, Message]],
     publisher: Publisher,
   ): IO[Unit] = for {
     _ <- IO.println("user has left the chat")
-    _ <- pingPongRef.update(_.updated(chatId, PingPong.empty))
-    chatHistory <- chatHistoryRef.get.map(_.get(chatId))
-    _ <- chatHistory.traverse { case ChatHistory(user: User, _) =>
+    maybeChatHistory <- chatHistoryRef.get.map(_.get(chatId))
+    _ <- maybeChatHistory.traverse { case ChatHistory(user: User, _) =>
       for {
         _ <- redisCmdClient.zAdd("users", None, ScoreWithValue(Score(1), user.asJson))
-        _ <- topic.traverse_(_.publish1(Out.UserLeft(chatId).some))
+        _ <- topic.traverse_(_.publish1(Out.UserLeft(chatId)))
         _ <- publishMsgToRedisPubSub[PubSubMessage.UserLeft](PubSubMessage.UserLeft(user), publisher)
       } yield ()
     }

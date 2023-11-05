@@ -1,6 +1,6 @@
 package ws
 
-import ws.WsMessage.Out
+import ws.Message.Out
 import play.api.libs.json._
 
 case class WsResponseBody(args: Out) extends AnyVal {
@@ -8,7 +8,7 @@ case class WsResponseBody(args: Out) extends AnyVal {
 }
 
 object WsResponseBody {
-  import WsMessage.Out.codecs.wo
+  import Message.Out.codecs.wo
 
   implicit val ww: Writes[WsResponseBody] =
     (body: WsResponseBody) =>
