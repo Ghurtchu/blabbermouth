@@ -18,31 +18,21 @@ import ws.Message.Out.codecs.wul
 import scala.concurrent.duration.DurationInt
 
 trait WsConnectionClosedAction[F[_]] {
-  def react(
-    topic: Topic[F, Message],
-    chatId: String,
-    pingPong: PingPong,
-    chatHistoryRef: Ref[F, Map[String, ChatHistory]],
-    redisCmdClient: SortedSetCommands[F, String, String],
-    publisher: Pipe[F, String, Unit],
-  ): F[Unit]
+  def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit]
 }
 
 object WsConnectionClosedAction {
 
   def empty[F[_]: Applicative]: WsConnectionClosedAction[F] =
-    (_, _, _, _, _, _) => ().pure[F]
+    (_, _, _) => ().pure[F]
 
-  def of[F[_]: Monad: Console: Temporal: Concurrent: Parallel]: WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
+  def of[F[_]: Monad: Console: Temporal: Concurrent: Parallel](
+    chatHistoryRef: Ref[F, Map[String, ChatHistory]],
+    redisCmdClient: SortedSetCommands[F, String, String],
+    publisher: Pipe[F, String, Unit],
+  ): WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
 
-    def react(
-      topic: Topic[F, Message],
-      chatId: String,
-      pingPong: PingPong,
-      chatHistoryRef: Ref[F, Map[String, ChatHistory]],
-      redisCmdClient: SortedSetCommands[F, String, String],
-      publisher: Pipe[F, String, Unit],
-    ): F[Unit] =
+    def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit] =
       for {
         _ <- Console[F].println("WS connection was closed")
         // semantically blocks to make sure that we check the latest pong from User & Support later

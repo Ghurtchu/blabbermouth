@@ -230,15 +230,8 @@ object ChatServer extends IOApp.Simple {
             ).flatMapN {
               case (Some(topic), Some(pingPong)) =>
                 WsConnectionClosedAction
-                  .of[IO]
-                  .react(
-                    topic = topic,
-                    chatId = chatId,
-                    pingPong = pingPong,
-                    chatHistoryRef = chatHistoryRef,
-                    redisCmdClient = redisCmdClient,
-                    publisher = publisher,
-                  )
+                  .of[IO](chatHistoryRef, redisCmdClient, publisher)
+                  .react(topic, chatId, pingPong)
               case _ => IO.unit
             }
           }
