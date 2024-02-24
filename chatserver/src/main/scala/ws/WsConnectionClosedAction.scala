@@ -2,12 +2,11 @@ package ws
 
 import cats.effect.kernel.Concurrent
 import cats.effect.std.Console
-import cats.effect.{IO, Ref, Temporal}
+import cats.effect.{Ref, Temporal}
 import cats.{Applicative, Monad, Parallel}
 import cats.syntax.all._
 import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue}
-import domain.User
 import fs2.Pipe
 import fs2.concurrent.Topic
 import redis.PubSubMessage
@@ -31,7 +30,8 @@ trait WsConnectionClosedAction[F[_]] {
 
 object WsConnectionClosedAction {
 
-  def empty[F[_]: Applicative]: WsConnectionClosedAction[F] = ???
+  def empty[F[_]: Applicative]: WsConnectionClosedAction[F] =
+    (_, _, _, _, _, _) => ().pure[F]
 
   def of[F[_]: Monad: Console: Temporal: Concurrent: Parallel]: WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
 

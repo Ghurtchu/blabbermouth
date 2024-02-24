@@ -4,7 +4,7 @@ import play.api.libs.json.{Json, Reads, Writes}
 package object ws {
 
   implicit class JsonWritesSyntax[A: Writes](self: A) {
-    def toJson: String = Json stringify (Json toJson self)
+    def toJson: String = Json.stringify(Json.toJson(self))
   }
 
   implicit class JsonReadsSyntax(self: String) {

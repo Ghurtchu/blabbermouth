@@ -99,19 +99,18 @@ object Subscriber extends IOApp.Simple {
           }
           .merge {
             subscriber
-              .map { msg =>
-                println(s"$msg was consumed from Redis Pub/Sub")
-                WebSocketFrame.Text(msg)
+              .evalMap { msg =>
+                IO.println(s"$msg was consumed from Redis Pub/Sub") as
+                  WebSocketFrame.Text(msg)
               }
           },
         receive = topic.publish
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
-            println(s"received message: $body")
             Json
               .parse(body)
               .as[WsRequestBody]
-              .tap(req => println(s"parsed message to: $req"))
-              .pipe(_.args.getOrElse(Load))
+              .args
+              .getOrElse(Load)
           }),
       )
     }

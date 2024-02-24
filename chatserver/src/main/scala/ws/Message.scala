@@ -61,11 +61,8 @@ object Message {
     }
 
     object ChatHistory {
-      def init(
-        username: String,
-        userId: String,
-        chatId: String,
-      ): ChatHistory = ChatHistory(User(username, userId, chatId), Vector.empty)
+      def init(username: String, userId: String, chatId: String): ChatHistory =
+        ChatHistory(User(username, userId, chatId), Vector.empty)
     }
 
     case class UserJoined(user: domain.User) extends Out

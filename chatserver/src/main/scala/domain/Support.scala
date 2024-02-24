@@ -2,11 +2,7 @@ package domain
 
 import play.api.libs.json.{JsObject, JsString, Json, Writes}
 
-case class Support(
-  supportId: String,
-  supportUserName: String,
-  user: User,
-)
+case class Support(supportId: String, supportUserName: String, user: User)
 
 object Support {
   implicit val ws: Writes[Support] =

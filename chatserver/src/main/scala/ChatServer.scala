@@ -1,5 +1,5 @@
 import cats.effect._
-import cats.implicits.{catsSyntaxOptionId, catsSyntaxTuple2Semigroupal}
+import cats.syntax.all._
 import ws.{Message, PingPong, WebSocketTextSyntax, WsRequestBody, WsResponseBody}
 import ws.Message.Out.codecs._
 import ws.Message.In._
@@ -26,10 +26,7 @@ import ws._
 import org.http4s.websocket.WebSocketFrame.Text
 import redis.PubSubMessage
 
-import java.time.Instant
-import java.time.temporal.ChronoUnit
-import scala.Option.when
-import scala.concurrent.duration.{DurationInt, FiniteDuration}
+import scala.concurrent.duration.DurationInt
 
 /**   - publishes Join message to Redis pub/sub
   *   - serves chat functionality via WebSockets
@@ -97,10 +94,10 @@ object ChatServer extends IOApp.Simple {
   private def updatePingPongRef(
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: ChatId,
-    updatePingPong: PingPong => PingPong,
+    updateFunction: PingPong => PingPong,
     initial: PingPong,
   ): IO[Unit] =
-    pingPongRef.update(_.updatedWith(chatId)(_.map(updatePingPong).getOrElse(initial).some))
+    pingPongRef.update(_.updatedWith(chatId)(_.map(updateFunction).getOrElse(initial).some))
 
   private def webSocketApp(
     wsb: WebSocketBuilder2[IO],
@@ -143,8 +140,8 @@ object ChatServer extends IOApp.Simple {
                   updatePingPongRef(
                     pingPongRef = pingPongRef,
                     chatId = chatId,
-                    updatePingPong = _.copy(userTimeStamp = now.some),
-                    initial = PingPong(now.some, None),
+                    updateFunction = _.updateUserTimestamp(now),
+                    initial = PingPong.initUser(now),
                   ) as Pong,
                 )
               case Text("pong:support", _) =>
@@ -152,8 +149,8 @@ object ChatServer extends IOApp.Simple {
                   updatePingPongRef(
                     pingPongRef = pingPongRef,
                     chatId = chatId,
-                    updatePingPong = _.copy(supportTimestamp = now.some),
-                    initial = PingPong(None, now.some),
+                    updateFunction = _.updateSupportTimestamp(now),
+                    initial = PingPong.initSupport(now),
                   ) as Pong,
                 )
               case Text(body, _) =>
