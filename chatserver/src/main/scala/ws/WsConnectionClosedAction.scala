@@ -18,7 +18,7 @@ import ws.Message.Out.codecs.wul
 import scala.concurrent.duration.DurationInt
 
 trait WsConnectionClosedAction[F[_]] {
-  def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit]
+  def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit]
 }
 
 object WsConnectionClosedAction {
@@ -32,14 +32,14 @@ object WsConnectionClosedAction {
     publisher: Pipe[F, String, Unit],
   ): WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
 
-    def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit] =
+    def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit] =
       for {
         _ <- Console[F].println("WS connection was closed")
         // semantically blocks to make sure that we check the latest pong from User & Support later
         _ <- Temporal[F].sleep(5.seconds)
         _ <- pingPong match {
           // both of them were joined at some point
-          case PingPong(Some(userT), Some(supportT)) =>
+          case Some(PingPong(Some(userT), Some(supportT))) =>
             if (userT.isBefore(supportT))
               userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
             else
@@ -47,7 +47,11 @@ object WsConnectionClosedAction {
                 topic.publish1(Out.SupportLeft(chatId)).void
 
           // only user has joined, so if WS get closed it means that only user has left :)
-          case PingPong(Some(_), None) =>
+          case Some(PingPong(Some(_), None)) =>
+            userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+
+          // if PingPong is None it means that User hasn't even sent one "pong" response to WS and immediately left
+          case None =>
             userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
 
           // in any other cases it's only possible that User leaves the chat, not the Support
