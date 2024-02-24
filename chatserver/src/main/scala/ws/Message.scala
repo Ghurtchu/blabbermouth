@@ -65,8 +65,7 @@ object Message {
         username: String,
         userId: String,
         chatId: String,
-      ): ChatHistory =
-        new ChatHistory(User(username, userId, chatId), Vector.empty)
+      ): ChatHistory = ChatHistory(User(username, userId, chatId), Vector.empty)
     }
 
     case class UserJoined(user: domain.User) extends Out

@@ -48,7 +48,7 @@ object Subscriber extends IOApp.Simple {
   ): Resource[IO, Subscriber] =
     PubSub
       .mkPubSubConnection[IO, String, String](redis, RedisCodec.Utf8)
-      .map(_ subscribe channel)
+      .map(_.subscribe(channel))
 
   override val run = (for {
     topic <- mkTopic[WsMessage]
@@ -63,6 +63,7 @@ object Subscriber extends IOApp.Simple {
       .build
 
   } yield ()).useForever
+
   def webSocketApp(
     subscriber: Subscriber,
     topic: Topic[IO, WsMessage],
