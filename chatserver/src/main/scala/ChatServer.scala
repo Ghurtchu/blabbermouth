@@ -224,10 +224,7 @@ object ChatServer extends IOApp.Simple {
 
         wsb
           .withOnClose {
-            (
-              maybeTopic,
-              pingPongRef.get.map(_.get(chatId)),
-            ).flatMapN {
+            (maybeTopic, pingPongRef.get.map(_.get(chatId))).flatMapN {
               case (Some(topic), pingPong) =>
                 WsConnectionClosedAction
                   .of[IO](chatHistoryRef, redisCmdClient, publisher)

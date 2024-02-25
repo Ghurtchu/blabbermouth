@@ -14,19 +14,23 @@ lazy val root = (project in file("."))
   .aggregate(chatserver, subscriber)
   .settings(
     name := "root",
-  )
+  ).enablePlugins(DockerPlugin)
 
 lazy val chatserver = (project in file("chatserver"))
   .settings(
     name := "chatserver",
     assembly / assemblyJarName := "chatserver.jar",
-    assembly / mainClass := Some("ChatServer") // Replace "com.example.MainClass" with the fully qualified name of your main class
+    assembly / mainClass := Some("ChatServer"), // Replace "com.example.MainClass" with the fully qualified name of your main class
   )
   .settings(commonSettings)
+  .enablePlugins(DockerPlugin)
 
 lazy val subscriber = (project in file("subscriber"))
   .settings(
     name := "subscriber",
-    assemblyJarName in assembly := "subscriber.jar",
+    assembly / assemblyJarName := "subscriber.jar",
+    assembly / mainClass := Some("Subscriber"),
   )
   .settings(commonSettings)
+  .enablePlugins(DockerPlugin)
+
