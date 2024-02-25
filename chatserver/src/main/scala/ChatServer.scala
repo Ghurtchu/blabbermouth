@@ -1,4 +1,5 @@
 import cats.effect._
+import cats.effect.std.Console
 import cats.syntax.all._
 import ws.{Message, PingPong, WebSocketTextSyntax, WsRequestBody, WsResponseBody}
 import ws.Message.Out.codecs._
@@ -224,13 +225,16 @@ object ChatServer extends IOApp.Simple {
 
         wsb
           .withOnClose {
-            (maybeTopic, pingPongRef.get.map(_.get(chatId))).flatMapN {
-              case (Some(topic), pingPong) =>
-                WsConnectionClosedAction
-                  .of[IO](chatHistoryRef, redisCmdClient, publisher)
-                  .react(topic, chatId, pingPong)
-              case _ => IO.unit
-            }
+            Console[IO].println("WS connection was closed") *>
+              (maybeTopic, pingPongRef.get.map(_.get(chatId))).flatMapN {
+                case (Some(topic), pingPong) =>
+                  // semantically blocks to make sure that we check the latest pong from User & Support later
+                  Temporal[IO].sleep(5.seconds) *>
+                    WsConnectionClosedAction
+                      .of[IO](chatHistoryRef, redisCmdClient, publisher)
+                      .react(topic, chatId, pingPong)
+                case _ => ().pure[IO]
+              }
           }
           .build(send, receive)
     }

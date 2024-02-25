@@ -33,31 +33,26 @@ object WsConnectionClosedAction {
   ): WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
 
     def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit] =
-      for {
-        _ <- Console[F].println("WS connection was closed")
-        // semantically blocks to make sure that we check the latest pong from User & Support later
-        _ <- Temporal[F].sleep(5.seconds)
-        _ <- pingPong match {
-          // both of them were joined at some point
-          case Some(PingPong(Some(userT), Some(supportT))) =>
-            if (userT.isBefore(supportT))
-              userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
-            else
-              Console[F].println("Support left the chat") *>
-                topic.publish1(Out.SupportLeft(chatId)).void
-
-          // only user has joined, so if WS get closed it means that only user has left :)
-          case Some(PingPong(Some(_), None)) =>
+      pingPong match {
+        // both of them were joined at some point
+        case Some(PingPong(Some(userT), Some(supportT))) =>
+          if (userT.isBefore(supportT))
             userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+          else
+            Console[F].println("Support left the chat") *>
+              topic.publish1(Out.SupportLeft(chatId)).void
 
-          // if PingPong is None it means that User hasn't even sent one "pong" response to WS and immediately left
-          case None =>
-            userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+        // only user has joined, so if WS get closed it means that only user has left :)
+        case Some(PingPong(Some(_), None)) =>
+          userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
 
-          // in any other cases it's only possible that User leaves the chat, not the Support
-          case _ => userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
-        }
-      } yield ()
+        // if PingPong is None it means that User hasn't even sent one "pong" response to WS and immediately left
+        case None =>
+          userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+
+        // in any other cases it's only possible that User leaves the chat, not the Support
+        case _ => userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+      }
   }
 
   private def userLeftChat[F[_]: Monad: Console: Concurrent: Parallel](

@@ -11,4 +11,4 @@ COPY . /app
 RUN sbt "project chatserver" clean assembly
 
 # Run application when the container launches
-CMD ["sh", "-c", "java -jar chatserver/target/scala-2.13/chatserver.jar"]
+CMD ["java", "-jar", "chatserver/target/scala-2.13/chatserver.jar"]

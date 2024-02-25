@@ -11,4 +11,4 @@ COPY . /app
 RUN sbt "project subscriber" clean assembly
 
 # Specify the command to run on container startup
-CMD ["sh", "-c", "java -jar subscriber/target/scala-2.13/subscriber.jar"]
+CMD ["java", "-jar", "subscriber/target/scala-2.13/subscriber.jar"]
