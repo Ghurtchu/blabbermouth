@@ -28,30 +28,32 @@ object WsConnectionClosedAction {
 
   def of[F[_]: Monad: Console: Temporal: Concurrent: Parallel](
     chatHistoryRef: Ref[F, Map[String, ChatHistory]],
-    redisCmdClient: SortedSetCommands[F, String, String],
+    redisClient: redis.RedisClient[F],
     publisher: Pipe[F, String, Unit],
   ): WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
 
+    // TODO: This logic can be refined..
+    // TODO: Draw diagrams with timestamps to understand all the cases
     def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit] =
       pingPong match {
         // both of them were joined at some point
         case Some(PingPong(Some(userT), Some(supportT))) =>
           if (userT.isBefore(supportT))
-            userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+            userLeftChat[F](topic, chatId, chatHistoryRef, redisClient, publisher)
           else
             Console[F].println("Support left the chat") *>
               topic.publish1(Out.SupportLeft(chatId)).void
 
         // only user has joined, so if WS get closed it means that only user has left :)
         case Some(PingPong(Some(_), None)) =>
-          userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+          userLeftChat[F](topic, chatId, chatHistoryRef, redisClient, publisher)
 
         // if PingPong is None it means that User hasn't even sent one "pong" response to WS and immediately left
         case None =>
-          userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+          userLeftChat[F](topic, chatId, chatHistoryRef, redisClient, publisher)
 
         // in any other cases it's only possible that User leaves the chat, not the Support
-        case _ => userLeftChat[F](topic, chatId, chatHistoryRef, redisCmdClient, publisher)
+        case _ => userLeftChat[F](topic, chatId, chatHistoryRef, redisClient, publisher)
       }
   }
 
@@ -59,7 +61,7 @@ object WsConnectionClosedAction {
     topic: Topic[F, Message],
     chatId: String,
     chatHistory: Ref[F, Map[String, ChatHistory]],
-    redisCmdClient: SortedSetCommands[F, String, String],
+    redisClient: redis.RedisClient[F],
     publisher: Pipe[F, String, Unit],
   ): F[Unit] = for {
     _ <- Console[F].println("User left the chat")
@@ -67,7 +69,7 @@ object WsConnectionClosedAction {
     _ <- maybeChatHistory.traverse_ { case ChatHistory(user: domain.User, _) =>
       (
         Console[F].println(s"setting status to inactive for user with userId: ${user.userId}") *>
-          redisCmdClient.zAdd("users", None, ScoreWithValue(Score(1), user.toJson)).void,
+          redisClient.send(key = "users", score = 1, message = user.toJson).void,
         Console[F].println("sending UserLeft message to client") *>
           topic.publish1(Out.UserLeft(chatId)).void,
         Console[F].println("publishing UserLeft message to Redis Pub/Sub") *> fs2.Stream

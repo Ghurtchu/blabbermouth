@@ -41,6 +41,7 @@ object ChatServer extends IOApp.Simple {
   private type WebSocketFrameFlow = Flow[WebSocketFrame]
   type Publisher = Flow[String]
 
+  // TODO: parse from config later
   val redisLocation = "redis://redis"
 
   def generateRandomId: IO[String] = IO.delay {
@@ -51,19 +52,19 @@ object ChatServer extends IOApp.Simple {
   }
 
   private def mkPublisher(
-    redis: RedisClient,
+    redisClient: RedisClient,
     channel: RedisChannel[String],
   ): Resource[IO, Publisher] =
     PubSub
-      .mkPubSubConnection[IO, String, String](redis, RedisCodec.Utf8)
+      .mkPubSubConnection[IO, String, String](redisClient, RedisCodec.Utf8)
       .map(_.publish(channel))
 
   private def mkSortedSetCommandsClient(
-    redis: RedisClient,
+    redisClient: RedisClient,
   ): Resource[IO, SortedSetCommands[IO, String, String]] =
     Redis[IO]
       .fromClient(
-        redis,
+        redisClient,
         RedisCodec.Utf8,
       )
 
@@ -74,9 +75,10 @@ object ChatServer extends IOApp.Simple {
     RedisClient[IO].from(redisLocation)
 
   val run = (for {
-    redisClient <- mkRedisClient(redisLocation)
-    publisher <- mkPublisher(redisClient, RedisChannel("joins"))
-    redisCmdClient <- mkSortedSetCommandsClient(redisClient)
+    baseRedisClient <- mkRedisClient(redisLocation)
+    sortedSetCommands <- mkSortedSetCommandsClient(baseRedisClient)
+    redisClient <- redis.RedisClient.of[IO](sortedSetCommands)
+    publisher <- mkPublisher(baseRedisClient, RedisChannel("joins"))
     chatHistoryRef <- mkRef[UserId, ChatHistory]
     chatTopicRef <- mkRef[ChatId, Topic[IO, Message]]
     pingPongRef <- mkRef[ChatId, PingPong]
@@ -84,7 +86,7 @@ object ChatServer extends IOApp.Simple {
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, redisCmdClient, chatHistoryRef, publisher, pingPongRef, chatTopicRef))
+      .withHttpWebSocketApp(webSocketApp(_, redisClient, chatHistoryRef, publisher, pingPongRef, chatTopicRef))
       .withIdleTimeout(300.seconds)
       .build
   } yield ExitCode.Success).useForever
@@ -102,7 +104,7 @@ object ChatServer extends IOApp.Simple {
 
   private def webSocketApp(
     wsb: WebSocketBuilder2[IO],
-    redisCmdClient: SortedSetCommands[IO, String, String],
+    redisClient: redis.RedisClient[IO],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     publisher: Publisher,
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
@@ -165,7 +167,7 @@ object ChatServer extends IOApp.Simple {
                       user = User(username, userId, chatId)
                       pubSubMsgAsJson = PubSubMessage[User]("UserJoined", user).toJson
                       _ <- IO.println(s"Writing $user into Redis SortedSet with Score 0 - pending")
-                      _ <- redisCmdClient.zAdd("users", None, ScoreWithValue(Score(0), user.toJson))
+                      _ <- redisClient.send(key = "users", score = 0, message = user.toJson)
                       _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")
                       _ <- Stream.emit(pubSubMsgAsJson).through(publisher).compile.drain
                     } yield UserJoined(user)
@@ -229,9 +231,11 @@ object ChatServer extends IOApp.Simple {
               (maybeTopic, pingPongRef.get.map(_.get(chatId))).flatMapN {
                 case (Some(topic), pingPong) =>
                   // semantically blocks to make sure that we check the latest pong from User & Support later
+                  // in this 5 seconds the pingPong will be updated by the "pong" responses from the chat participant who didn't leave the conversation yet
+                  // so in the end, we will compare the timestamps of last "pong" messages for user and support.
                   Temporal[IO].sleep(5.seconds) *>
                     WsConnectionClosedAction
-                      .of[IO](chatHistoryRef, redisCmdClient, publisher)
+                      .of[IO](chatHistoryRef, redisClient, publisher)
                       .react(topic, chatId, pingPong)
                 case _ => ().pure[IO]
               }
