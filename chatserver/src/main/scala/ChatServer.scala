@@ -128,7 +128,7 @@ object ChatServer extends IOApp.Simple {
           case Some(topic) =>
             topic.publish.compose[WebSocketFrames](_.evalMap { case Text(body, _) =>
               body.into[ClientWsMsg] match {
-                case Left(error) => IO.println(s"could not deserialize $body: $error") as UnknownMessage
+                case Left(error) => IO.println(s"could not deserialize $body: $error") as UnrecognizedMessage
                 case Right(clientWebSocketMessage) =>
                   clientWebSocketMessage.args match {
                     case pong @ Pong(ChatParticipant.User) =>

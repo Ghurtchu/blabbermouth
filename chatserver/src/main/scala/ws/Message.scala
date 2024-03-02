@@ -45,7 +45,7 @@ object Message {
       *   - unrecognizable / malformed Json
       *   - any other thing that can't be parsed from contextually available Reads[ClientWsMsg]
       */
-    case object UnknownMessage extends In
+    case object UnrecognizedMessage extends In
 
     /** Received from Client to Server when:
       *   - User tries to Join the system
