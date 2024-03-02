@@ -140,7 +140,7 @@ object ChatServer extends IOApp.Simple {
                           initial = PingPong.initUser(now),
                         ) as pong,
                       )
-                    case pong @ Pong(ChatParticipant.User) =>
+                    case pong @ Pong(ChatParticipant.Support) =>
                       IO.realTimeInstant.flatMap(now =>
                         updatePingPongRef(
                           pingPongRef = pingPongRef,
