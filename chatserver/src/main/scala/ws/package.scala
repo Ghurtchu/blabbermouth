@@ -8,7 +8,13 @@ package object ws {
   }
 
   implicit class JsonReadsSyntax(self: String) {
-    def into[A: Reads]: A = Json.parse(self).as[A]
+    def into[A: Reads]: Either[String, A] =
+      scala.util
+        .Try(Json.parse(self))
+        .fold(
+          errors => Left(errors.toString),
+          json => Right(json.as[A]),
+        )
   }
 
   implicit class WebSocketTextSyntax(self: String) {

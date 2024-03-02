@@ -1,16 +1,17 @@
 package ws
 
 import ws.Message.{ChatMessage, In}
-import ws.Message.In.Join
+import ws.Message.In.{Join, Pong}
 import play.api.libs.json._
 
-case class WsRequestBody(`type`: String, args: In)
+// WebSocket message sent from Client to Server
+case class ClientWsMsg(`type`: String, args: In)
 
-object WsRequestBody {
+object ClientWsMsg {
   import In.codecs._
   import Message.codecs._
 
-  implicit val rr: Reads[WsRequestBody] = json =>
+  implicit val rr: Reads[ClientWsMsg] = json =>
     for {
       typ <- (json \ "type")
         .validateOpt[String]
@@ -22,9 +23,10 @@ object WsRequestBody {
             typ match {
               case "Join"        => implicitly[Reads[Join]] reads args
               case "ChatMessage" => implicitly[Reads[ChatMessage]] reads args
+              case "Pong"        => implicitly[Reads[Pong]] reads args
               case _             => JsError("unrecognized `type`")
             }
           }.getOrElse(JsError("`args` is empty"))
         }
-    } yield WsRequestBody(typ, args)
+    } yield ClientWsMsg(typ, args)
 }

@@ -3,7 +3,7 @@ package ws
 import ws.WsMessage.In
 import ws.WsMessage.In.{JoinUser, Load}
 import ws.WsMessage.In.codecs._
-import play.api.libs.json.{JsError, JsResult, JsSuccess, JsValue, Reads}
+import play.api.libs.json.{JsError, JsSuccess, JsValue, Reads}
 
 case class WsRequestBody(`type`: String, args: Option[In])
 

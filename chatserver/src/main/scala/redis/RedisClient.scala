@@ -1,6 +1,7 @@
 package redis
 
 import cats.effect.Resource
+import cats.effect.implicits.effectResourceOps
 import cats.effect.kernel.Sync
 import cats.{Applicative, Functor}
 import cats.syntax.functor._
@@ -24,8 +25,8 @@ object RedisClient {
 
   def of[F[_]: Sync](
     sortedSetCommands: SortedSetCommands[F, String, String],
-  ): Resource[F, RedisClient[F]] = {
-    val redisClient = new RedisClient[F] {
+  ): F[RedisClient[F]] = Sync[F].delay {
+    new RedisClient[F] {
       override def send(
         key: String,
         score: Double,
@@ -40,7 +41,8 @@ object RedisClient {
           )
           .void
     }
-
-    Resource.eval(Sync[F].delay(redisClient))
   }
+
+  def make[F[_]: Sync](sortedSetCommands: SortedSetCommands[F, String, String]): Resource[F, RedisClient[F]] =
+    of[F](sortedSetCommands).toResource
 }

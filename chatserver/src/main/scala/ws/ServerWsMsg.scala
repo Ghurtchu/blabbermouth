@@ -3,15 +3,16 @@ package ws
 import ws.Message.Out
 import play.api.libs.json._
 
-case class WsResponseBody(args: Out) extends AnyVal {
+// WebSocket message sent from Server to Client
+case class ServerWsMsg(args: Out) extends AnyVal {
   def `type`: String = args.getClass.getSimpleName
 }
 
-object WsResponseBody {
+object ServerWsMsg {
   import Message.Out.codecs.wo
 
-  implicit val ww: Writes[WsResponseBody] =
-    (body: WsResponseBody) =>
+  implicit val ww: Writes[ServerWsMsg] =
+    (body: ServerWsMsg) =>
       JsObject(
         Map(
           "type" -> JsString(body.`type`),

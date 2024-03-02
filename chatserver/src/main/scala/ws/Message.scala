@@ -2,19 +2,26 @@ package ws
 
 import domain.{ChatParticipant, User}
 import org.http4s.websocket.WebSocketFrame
-import play.api.libs.json.{Format, Json, Reads, Writes}
+import play.api.libs.json
+import play.api.libs.json.{Format, JsError, JsSuccess, Json, Reads, Writes}
+import play.api.libs.json.{JsError, JsSuccess, JsValue, Reads}
 
 import java.time.Instant
 
+/** Hierarchy of messages which can be:
+  *   - sent from Client to Server (In)
+  *   - sent from Server to Client (Out)
+  */
 sealed trait Message
 
 object Message {
 
-  case object Pong extends Message
-
+  // Parent type of messages which can be sent from Client to Server
   sealed trait In extends Message
+  // Parent type of messages which can be sent from Server to Client
   sealed trait Out extends Message
 
+  // ChatMessage can be sent both ways (from & to Client & Server)
   case class ChatMessage(
     content: String,
     from: ChatParticipant,
@@ -28,8 +35,22 @@ object Message {
     implicit val cmf: Format[ChatMessage] = Json.format[ChatMessage]
   }
 
+  // Groups all In messages
   object In {
 
+    // Pong responses from User and Support for managing WS connection
+    case class Pong(from: ChatParticipant) extends In
+
+    /** Used in case Client sends:
+      *   - unrecognizable / malformed Json
+      *   - any other thing that can't be parsed from contextually available Reads[ClientWsMsg]
+      */
+    case object UnknownMessage extends In
+
+    /** Received from Client to Server when:
+      *   - User tries to Join the system
+      *   - Support tries to Join the User
+      */
     case class Join(
       from: ChatParticipant,
       userId: String,
@@ -39,19 +60,32 @@ object Message {
     ) extends In
 
     object codecs {
+      implicit val rp: Reads[Pong] = json =>
+        for {
+          from <- (json \ "from").validateOpt[String]
+          result <- from match {
+            case Some("User")    => JsSuccess(Pong(ChatParticipant.User))
+            case Some("Support") => JsSuccess(Pong(ChatParticipant.Support))
+            case Some(other)     => JsError(s"unrecognized `from`: $other")
+            case None            => JsError("empty `from`")
+          }
+        } yield result
       implicit val rj: Reads[Join] = Json.reads[Join]
     }
   }
 
+  // Groups all Out messages
   object Out {
     import In._
 
+    // Sent from Server to Client when they get registered in the system
     case class Registered(
       userId: String,
       username: String,
       chatId: String,
     ) extends Out
 
+    // Sent from Server to Client to load the chat history
     case class ChatHistory(
       user: User,
       messages: Vector[ChatMessage],
@@ -61,14 +95,25 @@ object Message {
     }
 
     object ChatHistory {
-      def init(username: String, userId: String, chatId: String): ChatHistory =
-        ChatHistory(User(username, userId, chatId), Vector.empty)
+      def init(
+        username: String,
+        userId: String,
+        chatId: String,
+      ): ChatHistory = ChatHistory(
+        user = User(username, userId, chatId),
+        messages = Vector.empty,
+      )
     }
 
+    // Sent to Client when User joins the chat system for the first time
     case class UserJoined(user: domain.User) extends Out
+    // Sent to Client when Support joins the chat system for the first time
     case class SupportJoined(support: domain.Support) extends Out
+    // Sent to Client when chat gets expired
     case class ChatExpired(chatId: String) extends Out
+    // Sent to Client when User leaves the chat system
     case class UserLeft(chatId: String) extends Out
+    // Sent to Client when Support leaves the chat system
     case class SupportLeft(chatId: String) extends Out
 
     object codecs {
