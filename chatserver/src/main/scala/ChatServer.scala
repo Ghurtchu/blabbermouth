@@ -7,11 +7,9 @@ import ws.Message.In._
 import ws.Message.Out._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
-import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import dev.profunktor.redis4cats.effects._
 import fs2.{Pipe, Stream}
 import org.http4s.dsl.Http4sDsl
 import org.http4s.{HttpApp, HttpRoutes}
@@ -26,6 +24,8 @@ import ws.Message._
 import ws._
 import org.http4s.websocket.WebSocketFrame.Text
 import redis.{PubSubMessage, RedisPublisher}
+import PubSubMessage.Args.codecs._
+import PubSubMessage._
 
 import scala.concurrent.duration.DurationInt
 
@@ -36,9 +36,9 @@ object ChatServer extends IOApp.Simple {
 
   type UserId = String
   type ChatId = String
-  private type WebSocketFrames = Stream[IO, WebSocketFrame]
-  private type Flow[A] = Pipe[IO, A, Unit]
-  private type WebSocketFrameFlow = Flow[WebSocketFrame]
+  type WebSocketFrames = Stream[IO, WebSocketFrame]
+  type Flow[A] = Pipe[IO, A, Unit]
+  type WebSocketFrameFlow = Flow[WebSocketFrame]
 
   // TODO: parse from config later
   val redisLocation = "redis://redis"
@@ -67,7 +67,7 @@ object ChatServer extends IOApp.Simple {
             .flatMap(redis.RedisPublisher.make[IO])
         } yield (client, publisher)
       }
-    (redisClient, publisher) = redisClientAndPublisher
+    (redisClient, redisPublisher) = redisClientAndPublisher
     chatHistoryRef <- mkRef[UserId, ChatHistory]
     chatTopicRef <- mkRef[ChatId, Topic[IO, Message]]
     pingPongRef <- mkRef[ChatId, PingPong]
@@ -75,7 +75,7 @@ object ChatServer extends IOApp.Simple {
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, redisClient, chatHistoryRef, publisher, pingPongRef, chatTopicRef))
+      .withHttpWebSocketApp(webSocketApp(_, redisClient, chatHistoryRef, redisPublisher, pingPongRef, chatTopicRef))
       .withIdleTimeout(300.seconds)
       .build
   } yield ExitCode.Success).useForever
@@ -103,23 +103,21 @@ object ChatServer extends IOApp.Simple {
     import dsl._
     HttpRoutes.of[IO] {
       case GET -> Root / "user" / "join" / username =>
-        (
-          generateRandomId,
-          generateRandomId,
-        ).flatMapN { case (userId, chatId) =>
-          for {
-            _ <- IO.println(s"Registering $username in the system")
-            _ <- chatHistoryRef
-              .update(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
-              .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
-            topic <- Topic[IO, Message]
-            _ <- chatTopicRef
-              .update(_.updated(chatId, topic))
-              .flatTap(cache => IO.println(s"ChatTopics cache: $cache"))
-            _ <- IO.println(s"Registered $username in the system")
-            response <- Ok(Registered(userId, username, chatId).toJson)
-          } yield response
-        }
+        (generateRandomId, generateRandomId)
+          .flatMapN { case (userId, chatId) =>
+            for {
+              _ <- IO.println(s"Registering $username in the system")
+              _ <- chatHistoryRef
+                .update(_.updated(chatId, ChatHistory.init(username, userId, chatId)))
+                .flatTap(cache => IO.println(s"ChatHistory cache: $cache"))
+              topic <- Topic[IO, Message]
+              _ <- chatTopicRef
+                .update(_.updated(chatId, topic))
+                .flatTap(cache => IO.println(s"ChatTopics cache: $cache"))
+              _ <- IO.println(s"Registered $username in the system")
+              response <- Ok(Registered(userId, username, chatId).toJson)
+            } yield response
+          }
       case GET -> Root / "chat" / chatId =>
         val maybeChatHistory = findById(chatHistoryRef)(chatId)
         val maybeTopic = findById(chatTopicRef)(chatId)
@@ -129,31 +127,31 @@ object ChatServer extends IOApp.Simple {
             topic.publish.compose[WebSocketFrames](_.evalMap { case Text(body, _) =>
               body.into[ClientWsMsg] match {
                 case Left(error) => IO.println(s"could not deserialize $body: $error") as UnrecognizedMessage
-                case Right(clientWebSocketMessage) =>
-                  clientWebSocketMessage.args match {
-                    case pong @ Pong(ChatParticipant.User) =>
+                case Right(clientWsMsg) =>
+                  clientWsMsg.args match {
+                    case userPong @ Pong(ChatParticipant.User) =>
                       IO.realTimeInstant.flatMap(now =>
                         updatePingPongRef(
                           pingPongRef = pingPongRef,
                           chatId = chatId,
                           updateFunction = _.updateUserTimestamp(now),
                           initial = PingPong.initUser(now),
-                        ) as pong,
+                        ) as userPong,
                       )
-                    case pong @ Pong(ChatParticipant.Support) =>
+                    case supportPong @ Pong(ChatParticipant.Support) =>
                       IO.realTimeInstant.flatMap(now =>
                         updatePingPongRef(
                           pingPongRef = pingPongRef,
                           chatId = chatId,
                           updateFunction = _.updateSupportTimestamp(now),
                           initial = PingPong.initSupport(now),
-                        ) as pong,
+                        ) as supportPong,
                       )
                     case Join(ChatParticipant.User, userId, username, None, None) =>
                       for {
                         _ <- IO.println(s"User with userId: $userId is attempting to join the chat server")
                         user = User(username, userId, chatId)
-                        pubSubMsgAsJson = PubSubMessage[User]("UserJoined", user).toJson
+                        pubSubMsgAsJson = PubSubMessage.from(PubSubMessage.Args.UserJoined(user)).toJson
                         _ <- IO.println(s"Writing $user into Redis SortedSet with Score 0 - pending")
                         _ <- redisClient.send(key = "users", score = 0, message = user.toJson)
                         _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")
@@ -169,8 +167,8 @@ object ChatServer extends IOApp.Simple {
                         _ <- IO.println(s"Support attempting to join user with userId: $userId")
                         id <- generateRandomId
                         support = domain.Support(id, su, User(username, userId, chatId))
-                        pubSubMessage = PubSubMessage[domain.Support]("SupportJoinedUser", support).toJson
-                        _ <- Stream.emit(pubSubMessage).through(redisPublisher.pipe).compile.drain
+                        pubSubMsgAsJson = PubSubMessage.from(PubSubMessage.Args.SupportJoined(support)).toJson
+                        _ <- Stream.emit(pubSubMsgAsJson).through(redisPublisher.pipe).compile.drain
                         _ <- IO.println(s"Support joined the user with userId: $userId")
                       } yield SupportJoined(support)
                     // Support re-joins (browser refresh), so we load chat history

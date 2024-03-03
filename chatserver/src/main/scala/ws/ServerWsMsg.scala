@@ -12,11 +12,11 @@ object ServerWsMsg {
   import Message.Out.codecs.wo
 
   implicit val ww: Writes[ServerWsMsg] =
-    (body: ServerWsMsg) =>
+    (msg: ServerWsMsg) =>
       JsObject(
         Map(
-          "type" -> JsString(body.`type`),
-          "args" -> wo.writes(body.args),
+          "type" -> JsString(msg.`type`),
+          "args" -> wo.writes(msg.args),
         ),
       )
 }

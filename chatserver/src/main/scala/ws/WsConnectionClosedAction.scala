@@ -73,7 +73,7 @@ object WsConnectionClosedAction {
         Console[F].println("sending UserLeft message to client") *>
           topic.publish1(Out.UserLeft(chatId)).void,
         Console[F].println("publishing UserLeft message to Redis Pub/Sub") *> fs2.Stream
-          .emit(PubSubMessage[UserLeft]("UserLeft", UserLeft(chatId)).toJson)
+          .emit(PubSubMessage.from(PubSubMessage.Args.UserLeft(chatId)).toJson)
           .through(redisPublisher.pipe)
           .compile
           .drain,

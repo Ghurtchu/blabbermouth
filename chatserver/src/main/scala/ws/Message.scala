@@ -1,10 +1,7 @@
 package ws
 
 import domain.{ChatParticipant, User}
-import org.http4s.websocket.WebSocketFrame
-import play.api.libs.json
 import play.api.libs.json.{Format, JsError, JsSuccess, Json, Reads, Writes}
-import play.api.libs.json.{JsError, JsSuccess, JsValue, Reads}
 
 import java.time.Instant
 

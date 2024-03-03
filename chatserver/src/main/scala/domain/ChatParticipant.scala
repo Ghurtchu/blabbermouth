@@ -6,14 +6,6 @@ sealed trait ChatParticipant {
 
   import ChatParticipant._
 
-  /** if the subtype is User returns "User" otherwise returns "Support"
-    *
-    * if the subtype was User then this.getClass.getSimpleName would return "User$"
-    *
-    * so, calling .init in the end drops the dollar sign from "User$" and returns "User"
-    */
-  override def toString: String = this.getClass.getSimpleName.init
-
   def mirror: ChatParticipant = this match {
     case User    => Support
     case Support => User
@@ -21,13 +13,18 @@ sealed trait ChatParticipant {
 }
 object ChatParticipant {
 
-  case object User extends ChatParticipant
-  case object Support extends ChatParticipant
-
-  def fromString: String => Option[ChatParticipant] = PartialFunction.condOpt(_) {
-    case "User"    => User
-    case "Support" => Support
+  case object User extends ChatParticipant {
+    override def toString: String = "User"
   }
+  case object Support extends ChatParticipant {
+    override def toString: String = "Support"
+  }
+
+  def fromString: String => Option[ChatParticipant] =
+    PartialFunction.condOpt(_) {
+      case "User"    => User
+      case "Support" => Support
+    }
 
   private def toChatParticipant: String => JsResult[ChatParticipant] =
     ChatParticipant
