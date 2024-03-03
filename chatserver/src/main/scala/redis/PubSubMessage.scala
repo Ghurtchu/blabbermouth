@@ -11,28 +11,22 @@ object PubSubMessage {
     PubSubMessage(`type` = args.`type`, args = args)
 
   sealed trait Args {
-    def `type`: String
+    def `type`: String = this.getClass.getSimpleName.init
   }
 
   object Args {
 
     /** Sent when user joins the chat system
       */
-    case class UserJoined(user: domain.User) extends Args {
-      override def `type`: String = "UserJoined"
-    }
+    case class UserJoined(user: domain.User) extends Args
 
     /** Sent when user leaves the chat system
       */
-    case class UserLeft(chatId: String) extends Args {
-      override def `type`: String = "UserLeft"
-    }
+    case class UserLeft(chatId: String) extends Args
 
     /** Sent when Support specialist joins the user's chat
       */
-    case class SupportJoined(support: domain.Support) extends Args {
-      override def `type`: String = "SupportJoined"
-    }
+    case class SupportJoined(support: domain.Support) extends Args
 
     object codecs {
       implicit val wuj: Writes[UserJoined] = Json.writes[domain.User].contramap(_.user)
