@@ -25,24 +25,22 @@ object RedisClient {
 
   def of[F[_]: Sync](
     sortedSetCommands: SortedSetCommands[F, String, String],
-  ): F[RedisClient[F]] = Sync[F].delay {
-    new RedisClient[F] {
-      override def send(
-        key: String,
-        score: Double,
-        message: String,
-        args: Option[ZAddArgs] = None,
-      ): F[Unit] =
-        sortedSetCommands
-          .zAdd(
-            key = key,
-            args = args,
-            values = ScoreWithValue(Score(score), message),
-          )
-          .void
-    }
+  ): RedisClient[F] = new RedisClient[F] {
+    override def send(
+      key: String,
+      score: Double,
+      message: String,
+      args: Option[ZAddArgs] = None,
+    ): F[Unit] =
+      sortedSetCommands
+        .zAdd(
+          key = key,
+          args = args,
+          values = ScoreWithValue(Score(score), message),
+        )
+        .void
   }
 
   def make[F[_]: Sync](sortedSetCommands: SortedSetCommands[F, String, String]): Resource[F, RedisClient[F]] =
-    of[F](sortedSetCommands).toResource
+    Sync[F].delay(of[F](sortedSetCommands)).toResource
 }

@@ -7,19 +7,19 @@ import java.time.Instant
 case class PingPong(
   userTimeStamp: Option[Instant],
   supportTimestamp: Option[Instant],
-) {
-  def updateUserTimestamp(t: Instant): PingPong =
-    copy(userTimeStamp = Some(t))
-
-  def updateSupportTimestamp(t: Instant): PingPong =
-    copy(supportTimestamp = Some(t))
-}
+)
 
 object PingPong {
 
   def initUser(t: Instant): PingPong =
-    PingPong(userTimeStamp = Some(t), supportTimestamp = None)
+    PingPong(
+      userTimeStamp = Some(t),
+      supportTimestamp = None,
+    )
 
   def initSupport(t: Instant): PingPong =
-    PingPong(userTimeStamp = None, supportTimestamp = Some(t))
+    PingPong(
+      userTimeStamp = None,
+      supportTimestamp = Some(t),
+    )
 }

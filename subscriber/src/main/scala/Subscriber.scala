@@ -31,6 +31,7 @@ object Subscriber extends IOApp.Simple {
   type PubSubMessage = String
   type Subscriber = Stream[IO, PubSubMessage]
 
+  // TODO: parse from config later
   val redisLocation = "redis://redis"
 
   val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
@@ -52,7 +53,7 @@ object Subscriber extends IOApp.Simple {
 
   override val run = (for {
     topic <- mkTopic[WsMessage]
-    redis <- mkRedis("redis://redis")
+    redis <- mkRedis(redisLocation)
     subscriber <- mkSubscriber(redis, RedisChannel("joins"))
     _ <- EmberServerBuilder
       .default[IO]

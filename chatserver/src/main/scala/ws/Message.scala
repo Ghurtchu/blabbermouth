@@ -103,7 +103,7 @@ object Message {
     }
 
     // Sent to Client when User joins the chat system for the first time
-    case class UserJoined(user: domain.User) extends Out
+    case class UserJoined(user: User) extends Out
     // Sent to Client when Support joins the chat system for the first time
     case class SupportJoined(support: domain.Support) extends Out
     // Sent to Client when chat gets expired

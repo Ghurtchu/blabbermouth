@@ -18,7 +18,6 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import play.api.libs.json._
 import dev.profunktor.redis4cats.pubsub.PubSub
-import domain.{ChatParticipant, User}
 import fs2.concurrent.Topic
 import ws.Message._
 import ws._
@@ -26,6 +25,8 @@ import org.http4s.websocket.WebSocketFrame.Text
 import redis.{PubSubMessage, RedisPublisher}
 import PubSubMessage.Args.codecs._
 import PubSubMessage._
+import domain.{ChatParticipant, User}
+import users.UserStatusManager
 
 import scala.concurrent.duration.DurationInt
 
@@ -68,6 +69,7 @@ object ChatServer extends IOApp.Simple {
         } yield (client, publisher)
       }
     (redisClient, redisPublisher) = redisClientAndPublisher
+    userStatusManager = UserStatusManager.of[IO](redisClient)
     chatHistoryRef <- mkRef[UserId, ChatHistory]
     chatTopicRef <- mkRef[ChatId, Topic[IO, Message]]
     pingPongRef <- mkRef[ChatId, PingPong]
@@ -75,7 +77,7 @@ object ChatServer extends IOApp.Simple {
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9000")
-      .withHttpWebSocketApp(webSocketApp(_, redisClient, chatHistoryRef, redisPublisher, pingPongRef, chatTopicRef))
+      .withHttpWebSocketApp(webSocketApp(_, userStatusManager, chatHistoryRef, redisPublisher, pingPongRef, chatTopicRef))
       .withIdleTimeout(300.seconds)
       .build
   } yield ExitCode.Success).useForever
@@ -86,14 +88,14 @@ object ChatServer extends IOApp.Simple {
   private def updatePingPongRef(
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
     chatId: ChatId,
-    updateFunction: PingPong => PingPong,
+    update: PingPong => PingPong,
     initial: PingPong,
   ): IO[Unit] =
-    pingPongRef.update(_.updatedWith(chatId)(_.map(updateFunction).getOrElse(initial).some))
+    pingPongRef.update(_.updatedWith(chatId)(_.map(update).getOrElse(initial).some))
 
   private def webSocketApp(
     wsb: WebSocketBuilder2[IO],
-    redisClient: redis.RedisClient[IO],
+    userStatusManager: UserStatusManager[IO],
     chatHistoryRef: Ref[IO, Map[ChatId, ChatHistory]],
     redisPublisher: RedisPublisher[IO],
     pingPongRef: Ref[IO, Map[ChatId, PingPong]],
@@ -134,7 +136,7 @@ object ChatServer extends IOApp.Simple {
                         updatePingPongRef(
                           pingPongRef = pingPongRef,
                           chatId = chatId,
-                          updateFunction = _.updateUserTimestamp(now),
+                          update = _.copy(userTimeStamp = now.some),
                           initial = PingPong.initUser(now),
                         ) as userPong,
                       )
@@ -143,7 +145,7 @@ object ChatServer extends IOApp.Simple {
                         updatePingPongRef(
                           pingPongRef = pingPongRef,
                           chatId = chatId,
-                          updateFunction = _.updateSupportTimestamp(now),
+                          update = _.copy(supportTimestamp = now.some),
                           initial = PingPong.initSupport(now),
                         ) as supportPong,
                       )
@@ -153,7 +155,7 @@ object ChatServer extends IOApp.Simple {
                         user = User(username, userId, chatId)
                         pubSubMsgAsJson = PubSubMessage.from(PubSubMessage.Args.UserJoined(user)).toJson
                         _ <- IO.println(s"Writing $user into Redis SortedSet with Score 0 - pending")
-                        _ <- redisClient.send(key = "users", score = 0, message = user.toJson)
+                        _ <- userStatusManager.setPending(user.toJson)
                         _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")
                         _ <- Stream.emit(pubSubMsgAsJson).through(redisPublisher.pipe).compile.drain
                       } yield UserJoined(user)
@@ -222,7 +224,7 @@ object ChatServer extends IOApp.Simple {
                   // so in the end, we will compare the timestamps of last "pong" messages for user and support.
                   Temporal[IO].sleep(5.seconds) *>
                     WsConnectionClosedAction
-                      .of[IO](chatHistoryRef, redisClient, redisPublisher)
+                      .of[IO](chatHistoryRef, userStatusManager, redisPublisher)
                       .react(topic, chatId, pingPong)
                 case _ => ().pure[IO]
               }

@@ -6,6 +6,8 @@ sealed trait ChatParticipant {
 
   import ChatParticipant._
 
+  def code: String
+
   def mirror: ChatParticipant = this match {
     case User    => Support
     case Support => User
@@ -14,10 +16,11 @@ sealed trait ChatParticipant {
 object ChatParticipant {
 
   case object User extends ChatParticipant {
-    override def toString: String = "User"
+    def code: String = "User"
   }
+
   case object Support extends ChatParticipant {
-    override def toString: String = "Support"
+    def code: String = "Support"
   }
 
   def fromString: String => Option[ChatParticipant] =
@@ -29,8 +32,12 @@ object ChatParticipant {
   private def toChatParticipant: String => JsResult[ChatParticipant] =
     ChatParticipant
       .fromString(_)
-      .fold[JsResult[ChatParticipant]](JsError("unrecognized `ChatParticipant`"))(JsSuccess(_))
+      .fold[JsResult[ChatParticipant]](
+        JsError("unrecognized `ChatParticipant`"),
+      )(JsSuccess(_))
 
-  implicit val wc: Writes[ChatParticipant] = (cp: ChatParticipant) => JsString(cp.toString)
-  implicit val rc: Reads[ChatParticipant] = _.validate[String].flatMap(toChatParticipant)
+  implicit val wc: Writes[ChatParticipant] =
+    (cp: ChatParticipant) => JsString(cp.toString)
+  implicit val rc: Reads[ChatParticipant] =
+    _.validate[String].flatMap(toChatParticipant)
 }

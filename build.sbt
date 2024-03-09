@@ -3,7 +3,6 @@ ThisBuild / version := "0.1.0-SNAPSHOT"
 ThisBuild / scalaVersion := "2.13.12"
 
 val commonSettings = Seq(
-  libraryDependencies ++= Dependencies.all,
   assembly / assemblyMergeStrategy := {
     case PathList("META-INF", _*) => MergeStrategy.discard
     case _                        => MergeStrategy.first
@@ -12,25 +11,39 @@ val commonSettings = Seq(
 
 lazy val root = (project in file("."))
   .aggregate(chatserver, subscriber)
+  .settings(name := "root")
+  .settings(commonSettings)
+
+lazy val domain = (project in file("domain"))
   .settings(
-    name := "root",
-  ).enablePlugins(DockerPlugin)
+    name := "domain",
+    libraryDependencies := Dependencies.Json,
+  )
+  .settings(commonSettings)
+
+lazy val services = (project in file("services"))
+  .settings(
+    name := "services",
+    libraryDependencies := Dependencies.Services,
+  )
+  .dependsOn(domain)
 
 lazy val chatserver = (project in file("chatserver"))
   .settings(
     name := "chatserver",
     assembly / assemblyJarName := "chatserver.jar",
-    assembly / mainClass := Some("ChatServer"), // Replace "com.example.MainClass" with the fully qualified name of your main class
+    assembly / mainClass := Some("ChatServer"),
+    libraryDependencies := Dependencies.ChatServer,
   )
   .settings(commonSettings)
-  .enablePlugins(DockerPlugin)
+  .dependsOn(services)
 
 lazy val subscriber = (project in file("subscriber"))
   .settings(
     name := "subscriber",
     assembly / assemblyJarName := "subscriber.jar",
     assembly / mainClass := Some("Subscriber"),
+    libraryDependencies := Dependencies.Subscriber,
   )
   .settings(commonSettings)
-  .enablePlugins(DockerPlugin)
-
+  .dependsOn(services)

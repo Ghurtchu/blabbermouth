@@ -1,6 +1,5 @@
 package redis
 
-import domain.User
 import play.api.libs.json._
 
 case class PubSubMessage(`type`: String, args: PubSubMessage.Args)
