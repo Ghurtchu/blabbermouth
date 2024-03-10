@@ -1,18 +1,18 @@
 import cats.effect._
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
-import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue, ZRange}
 import fs2.Stream
 import fs2.concurrent.Topic
-import ws.{WsMessage, WsRequestBody}
-import ws.WsRequestBody.rr
-import ws.WsMessage.In.{JoinUser, Load}
-import ws.WsMessage.In.codecs._
+import json.Syntax.JsonWritesSyntax
+import ws.{ClientWsMsg, Message}
+import ws.ClientWsMsg.rr
+import ws.Message.In.{JoinUser, Load}
+import ws.Message.In.codecs._
+import ws.Message.Out.codecs._
 import org.http4s.Method.GET
 import org.http4s.dsl.io._
 import org.http4s.ember.server.EmberServerBuilder
@@ -20,7 +20,7 @@ import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import org.http4s.HttpRoutes
 import play.api.libs.json._
-import scala.util.chaining._
+import users.{PendingUsers, UserStatusManager}
 
 import scala.concurrent.duration.DurationInt
 
@@ -34,15 +34,6 @@ object Subscriber extends IOApp.Simple {
   // TODO: parse from config later
   val redisLocation = "redis://redis"
 
-  val redis: Resource[IO, SortedSetCommands[IO, String, String]] =
-    RedisClient[IO].from(redisLocation).flatMap(Redis[IO].fromClient(_, RedisCodec.Utf8))
-
-  private def mkTopic[A]: Resource[IO, Topic[IO, A]] =
-    Resource.eval(Topic[IO, A])
-
-  private def mkRedis(redisLocation: String): Resource[IO, RedisClient] =
-    RedisClient[IO].from(redisLocation)
-
   private def mkSubscriber(
     redis: RedisClient,
     channel: RedisChannel[String],
@@ -52,14 +43,19 @@ object Subscriber extends IOApp.Simple {
       .map(_.subscribe(channel))
 
   override val run = (for {
-    topic <- mkTopic[WsMessage]
-    redis <- mkRedis(redisLocation)
-    subscriber <- mkSubscriber(redis, RedisChannel("joins"))
+    topic <- Resource.eval(Topic[IO, Message])
+    baseRedisClient <- RedisClient[IO].from(redisLocation)
+    redisClient <- Redis[IO]
+      .fromClient(client = baseRedisClient, codec = RedisCodec.Utf8)
+      .flatMap(redis.RedisClient.make[IO])
+    subscriber <- mkSubscriber(baseRedisClient, RedisChannel("joins"))
+    pendingUsers = PendingUsers.of[IO](redisClient)
+    userStatusManager = UserStatusManager.of[IO](redisClient)
     _ <- EmberServerBuilder
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9001")
-      .withHttpWebSocketApp(webSocketApp(subscriber, topic, _).orNotFound)
+      .withHttpWebSocketApp(webSocketApp(subscriber, topic, _, pendingUsers, userStatusManager).orNotFound)
       .withIdleTimeout(60.minutes)
       .build
 
@@ -67,8 +63,10 @@ object Subscriber extends IOApp.Simple {
 
   def webSocketApp(
     subscriber: Subscriber,
-    topic: Topic[IO, WsMessage],
+    topic: Topic[IO, Message],
     wsb: WebSocketBuilder2[IO],
+    pendingUsers: PendingUsers[IO],
+    userStatusManager: UserStatusManager[IO],
   ): HttpRoutes[IO] =
     HttpRoutes.of[IO] { case GET -> Root / "users" =>
       wsb.build(
@@ -76,23 +74,21 @@ object Subscriber extends IOApp.Simple {
           .subscribe(10)
           .flatMap {
             case Load =>
-              val pendingUsers: IO[Stream[IO, WebSocketFrame.Text]] = for {
+              val loadPendingUsers = for {
                 _ <- IO.println("Loading pending users...")
-                users <- redis.use {
-                  _.zRangeByScore[Int]("users", ZRange(0, 0), None)
-                    .map(_.reverse.map(WebSocketFrame.Text(_)))
-                    .flatTap(u => IO.println(s"Finished loading pending users: $u"))
-                    .flatMap(frames => IO(Stream.emits(frames)))
-                }
+                users <- pendingUsers.load
+                  .map(_.map(WebSocketFrame.Text(_)))
+                  .flatTap(u => IO.println(s"Finished loading pending users: $u"))
+                  .flatMap(frames => IO.delay(Stream.emits(frames)))
               } yield users
 
-              Stream.eval(pendingUsers).flatten
+              Stream.eval(loadPendingUsers).flatten
             case ju: JoinUser =>
               val response: IO[WebSocketFrame.Text] = for {
                 _ <- IO.println(s"Attempting joining the user: $ju")
-                json = Json.prettyPrint(Json.toJson(ju))
-                _ <- redis.use(_.zAdd("users", None, ScoreWithValue(Score(1), json)))
-                removeUserFromClient = s"""{"type":"RemoveUser","args":{"userId":"${ju.userId}"}}"""
+                _ <- IO.println(s"Setting status to 'inactive' in Redis for user: $ju")
+                _ <- userStatusManager.setInactive(ju.toJson)
+                removeUserFromClient = Message.Out.RemoveUser(ju.userId).toJson
                 _ <- IO.println(s"sending back $removeUserFromClient")
               } yield WebSocketFrame.Text(removeUserFromClient)
 
@@ -109,7 +105,7 @@ object Subscriber extends IOApp.Simple {
           .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
             Json
               .parse(body)
-              .as[WsRequestBody]
+              .as[ClientWsMsg]
               .args
               .getOrElse(Load)
           }),

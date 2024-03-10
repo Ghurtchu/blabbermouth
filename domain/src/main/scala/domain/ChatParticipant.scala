@@ -2,6 +2,8 @@ package domain
 
 import play.api.libs.json._
 
+import scala.PartialFunction.condOpt
+
 sealed trait ChatParticipant {
 
   import ChatParticipant._
@@ -24,7 +26,7 @@ object ChatParticipant {
   }
 
   def fromString: String => Option[ChatParticipant] =
-    PartialFunction.condOpt(_) {
+    condOpt(_) {
       case "User"    => User
       case "Support" => Support
     }
@@ -32,9 +34,8 @@ object ChatParticipant {
   private def toChatParticipant: String => JsResult[ChatParticipant] =
     ChatParticipant
       .fromString(_)
-      .fold[JsResult[ChatParticipant]](
-        JsError("unrecognized `ChatParticipant`"),
-      )(JsSuccess(_))
+      .map(JsSuccess(_))
+      .getOrElse(JsError("unrecognized `ChatParticipant`"))
 
   implicit val wc: Writes[ChatParticipant] =
     (cp: ChatParticipant) => JsString(cp.toString)

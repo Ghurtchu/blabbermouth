@@ -2,12 +2,12 @@ package ws
 
 import play.api.libs.json.{Format, Json, Writes}
 
-sealed trait WsMessage
+sealed trait Message
 
-object WsMessage {
+object Message {
 
-  sealed trait In extends WsMessage
-  sealed trait Out extends WsMessage
+  sealed trait In extends Message
+  sealed trait Out extends Message
 
   object In {
     case object Load extends In
@@ -20,11 +20,14 @@ object WsMessage {
 
   object Out {
     case class NewUser(userId: String, username: String, chatId: String) extends Out
+    case class RemoveUser(userId: String) extends Out
 
     object codecs {
       implicit val wnu: Writes[NewUser] = Json.writes[NewUser]
-      implicit val wo: Writes[Out] = { case n: NewUser =>
-        wnu writes n
+      implicit val wru: Writes[RemoveUser] = Json.writes[RemoveUser]
+      implicit val wo: Writes[Out] = {
+        case n: NewUser     => wnu writes n
+        case ru: RemoveUser => wru writes ru
       }
     }
   }

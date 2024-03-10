@@ -1,7 +1,7 @@
 import cats.effect._
 import cats.effect.std.Console
 import cats.syntax.all._
-import ws.{ClientWsMsg, Message, PingPong, ServerWsMsg, WebSocketTextSyntax}
+import ws.{ClientWsMsg, Message, PingPong, ServerWsMsg}
 import ws.Message.Out.codecs._
 import ws.Message.In._
 import ws.Message.Out._
@@ -26,6 +26,7 @@ import redis.{PubSubMessage, RedisPublisher}
 import PubSubMessage.Args.codecs._
 import PubSubMessage._
 import domain.{ChatParticipant, User}
+import json.Syntax.{JsonReadsSyntax, JsonWritesSyntax}
 import users.UserStatusManager
 
 import scala.concurrent.duration.DurationInt
@@ -201,10 +202,10 @@ object ChatServer extends IOApp.Simple {
         val lazySend = maybeTopic.map {
           _.fold[WebSocketFrames](Stream.empty) {
             _.subscribe(10)
-              .collect { case o: Out => ServerWsMsg(o).toJson.toText }
+              .collect { case o: Out => Text(ServerWsMsg(o).toJson) }
               .merge {
                 // send "ping" message to WS client every 1 second
-                val ping = "ping".toText
+                val ping = Text("ping")
                 Stream.emit(ping) ++
                   Stream.awakeEvery[IO](1.second) as ping
               }

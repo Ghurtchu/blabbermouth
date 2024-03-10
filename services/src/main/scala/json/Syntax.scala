@@ -1,7 +1,8 @@
-import org.http4s.websocket.WebSocketFrame.Text
+package json
+
 import play.api.libs.json.{Json, Reads, Writes}
 
-package object ws {
+object Syntax {
 
   implicit class JsonWritesSyntax[A: Writes](self: A) {
     def toJson: String = Json.stringify(Json.toJson(self))
@@ -16,9 +17,4 @@ package object ws {
           json => Right(json.as[A]),
         )
   }
-
-  implicit class WebSocketTextSyntax(self: String) {
-    def toText: Text = Text(self)
-  }
-
 }

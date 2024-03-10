@@ -1,18 +1,18 @@
 package ws
 
-import ws.WsMessage.In
-import ws.WsMessage.In.{JoinUser, Load}
-import ws.WsMessage.In.codecs._
+import ws.Message.In
+import ws.Message.In.{JoinUser, Load}
+import ws.Message.In.codecs._
 import play.api.libs.json.{JsError, JsSuccess, JsValue, Reads}
 
-case class WsRequestBody(`type`: String, args: Option[In])
+case class ClientWsMsg(`type`: String, args: Option[In])
 
-object WsRequestBody {
-  implicit val rr: Reads[WsRequestBody] = json =>
+object ClientWsMsg {
+  implicit val rr: Reads[ClientWsMsg] = json =>
     for {
       typ <- (json \ "type")
         .validateOpt[String]
-        .flatMap(_.map(JsSuccess(_)).getOrElse(JsError("empty `type`")))
+        .flatMap(_.map(JsSuccess(_)).getOrElse(JsError("`type` is empty")))
       maybeArgs: Option[In] <- (json \ "args")
         .validateOpt[JsValue]
         .flatMap {
@@ -25,5 +25,5 @@ object WsRequestBody {
           case None if typ == "Load" => JsSuccess(Some(Load))
           case _                     => JsError("empty `args`")
         }
-    } yield WsRequestBody(typ, maybeArgs)
+    } yield ClientWsMsg(typ, maybeArgs)
 }

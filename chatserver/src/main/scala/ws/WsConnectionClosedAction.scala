@@ -5,18 +5,13 @@ import cats.effect.std.Console
 import cats.effect.{Ref, Temporal}
 import cats.{Applicative, Monad, Parallel}
 import cats.syntax.all._
-import dev.profunktor.redis4cats.algebra.SortedSetCommands
-import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue}
-import fs2.Pipe
 import fs2.concurrent.Topic
+import json.Syntax.JsonWritesSyntax
 import redis.PubSubMessage
 import redis.PubSubMessage._
 import users.UserStatusManager
 import ws.Message.Out
-import ws.Message.Out.{ChatHistory, UserLeft}
-import ws.Message.Out.codecs.wul
-
-import scala.concurrent.duration.DurationInt
+import ws.Message.Out.ChatHistory
 
 trait WsConnectionClosedAction[F[_]] {
   def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit]

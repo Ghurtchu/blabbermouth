@@ -11,6 +11,7 @@ import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue, ZRange}
 import io.lettuce.core.ZAddArgs
 
 trait RedisClient[F[_]] {
+
   def send(
     key: String,
     score: Double,
@@ -18,7 +19,11 @@ trait RedisClient[F[_]] {
     args: Option[ZAddArgs] = None,
   ): F[Unit]
 
-  def range(key: String, start: Int, end: Int): F[List[String]]
+  def range(
+    key: String,
+    start: Int,
+    end: Int,
+  ): F[List[String]]
 }
 
 object RedisClient {

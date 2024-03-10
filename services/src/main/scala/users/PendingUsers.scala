@@ -1,25 +1,28 @@
 package users
 
-import cats.Applicative
+import cats.{Applicative, Functor}
 import cats.syntax.applicative._
+import cats.syntax.functor._
 import redis.RedisClient
 
-trait PendingUsersRetriever[F[_]] {
+trait PendingUsers[F[_]] {
   def load: F[List[String]]
 }
 
-object PendingUsersRetriever {
+object PendingUsers {
 
-  def empty[F[+_]: Applicative]: PendingUsersRetriever[F] = new PendingUsersRetriever[F] {
+  def empty[F[+_]: Applicative]: PendingUsers[F] = new PendingUsers[F] {
     override def load: F[List[String]] = Nil.pure[F]
   }
 
-  def of[F[_]](redisClient: RedisClient[F]): PendingUsersRetriever[F] = new PendingUsersRetriever[F] {
+  def of[F[_]: Functor](redisClient: RedisClient[F]): PendingUsers[F] = new PendingUsers[F] {
     def load: F[List[String]] =
-      redisClient.range(
-        key = "users",
-        start = 0,
-        end = 0,
-      )
+      redisClient
+        .range(
+          key = "users",
+          start = 0,
+          end = 0,
+        )
+        .map(_.reverse)
   }
 }
