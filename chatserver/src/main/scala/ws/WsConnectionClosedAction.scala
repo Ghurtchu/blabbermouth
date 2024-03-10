@@ -76,5 +76,4 @@ object WsConnectionClosedAction {
       ).parTupled.void
     }
   } yield ()
-
 }

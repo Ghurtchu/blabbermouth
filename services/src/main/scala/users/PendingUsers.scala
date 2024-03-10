@@ -12,7 +12,7 @@ trait PendingUsers[F[_]] {
 object PendingUsers {
 
   def empty[F[+_]: Applicative]: PendingUsers[F] = new PendingUsers[F] {
-    override def load: F[List[String]] = Nil.pure[F]
+    def load: F[List[String]] = Nil.pure[F]
   }
 
   def of[F[_]: Functor](redisClient: RedisClient[F]): PendingUsers[F] = new PendingUsers[F] {

@@ -19,19 +19,18 @@ object UserStatusManager {
     new UserStatusManager[F] {
       val (users, pending, inactive) = ("users", 0, 1)
 
-      override def setPending(message: String): F[Unit] =
+      def setPending(message: String): F[Unit] =
         underlying.send(
           key = users,
           score = pending,
           message = message,
         )
 
-      override def setInactive(message: String): F[Unit] =
+      def setInactive(message: String): F[Unit] =
         underlying.send(
           key = users,
           score = inactive,
           message = message,
         )
     }
-
 }
