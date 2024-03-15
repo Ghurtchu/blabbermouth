@@ -8,7 +8,7 @@ import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import fs2.{Pure, Stream}
 import fs2.concurrent.Topic
 import json.Syntax.JsonWritesSyntax
-import ws.{ClientWsMsg, Message}
+import ws.{ClientWsMsg, Message, ServerWsMsg}
 import ws.ClientWsMsg.rr
 import ws.Message.In.{JoinUser, LoadPendingUsers}
 import ws.Message.In.codecs._
@@ -76,25 +76,25 @@ object Subscriber extends IOApp.Simple {
           .subscribe(10)
           .flatMap {
             case LoadPendingUsers =>
-              val res: IO[WebSocketFrame.Text] = for {
+              val res: IO[Out.PendingUsers] = for {
                 _ <- IO.println("Loading pending users...")
                 users <- pendingUsers.load
                 _ <- IO.println(s"Finished loading pending users: $users")
-                msg = Out.PendingUsers(users).toJson
-              } yield WebSocketFrame.Text(msg)
+              } yield Out.PendingUsers(users)
 
               Stream.eval(res)
             case ju: JoinUser =>
-              val response: IO[WebSocketFrame.Text] = for {
+              val response: IO[Out.RemoveUser] = for {
                 _ <- IO.println(s"Attempting joining the user: $ju")
                 _ <- IO.println(s"Setting status to 'inactive' in Redis for user: $ju")
                 _ <- userStatusManager.setInactive(ju.toJson)
-                removeUserFromClient = Message.Out.RemoveUser(ju.userId).toJson
-                _ <- IO.println(s"sending back $removeUserFromClient")
-              } yield WebSocketFrame.Text(removeUserFromClient)
+                msg = Out.RemoveUser(ju.userId)
+                _ <- IO.println(s"sending back $msg")
+              } yield msg
 
               Stream.eval(response)
           }
+          .collect { o: Out => WebSocketFrame.Text(ServerWsMsg(o).toJson) }
           .merge {
             subscriber
               .evalMap { msg =>
