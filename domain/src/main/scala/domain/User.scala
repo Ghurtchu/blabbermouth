@@ -1,6 +1,6 @@
 package domain
 
-import play.api.libs.json.{Json, Writes}
+import play.api.libs.json.{Format, Json}
 
 case class User(
   username: String,
@@ -9,5 +9,5 @@ case class User(
 )
 
 object User {
-  implicit val wu: Writes[User] = Json.writes[User]
+  implicit val fu: Format[User] = Json.format[User]
 }

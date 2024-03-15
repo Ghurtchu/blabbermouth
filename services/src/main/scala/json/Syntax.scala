@@ -7,7 +7,7 @@ import scala.util.Try
 object Syntax {
 
   implicit class JsonWritesSyntax[A: Writes](self: A) {
-    def toJson: String = Json.stringify(Json.toJson(self))
+    def toJson: String = (Json.stringify _ compose Json.toJson[A])(self)
   }
 
   implicit class JsonReadsSyntax(self: String) {
@@ -22,5 +22,7 @@ object Syntax {
                 Right(_),
               ),
         )
+
+    def intoOpt[A: Reads]: Option[A] = into.toOption
   }
 }

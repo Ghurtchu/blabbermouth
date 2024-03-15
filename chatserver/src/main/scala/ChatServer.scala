@@ -154,7 +154,7 @@ object ChatServer extends IOApp.Simple {
                       for {
                         _ <- IO.println(s"User with userId: $userId is attempting to join the chat server")
                         user = User(username, userId, chatId)
-                        pubSubMsgAsJson = PubSubMessage.from(PubSubMessage.Args.UserJoined(user)).toJson
+                        pubSubMsgAsJson = PubSubMessage.from(PubSubMessage.Args.UserPending(user)).toJson
                         _ <- IO.println(s"Writing $user into Redis SortedSet with Score 0 - pending")
                         _ <- userStatusManager.setPending(user.toJson)
                         _ <- IO.println(s"""Publishing $pubSubMsgAsJson into Redis pub/sub "users" channel""")

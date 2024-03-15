@@ -5,12 +5,12 @@ import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import fs2.Stream
+import fs2.{Pure, Stream}
 import fs2.concurrent.Topic
 import json.Syntax.JsonWritesSyntax
 import ws.{ClientWsMsg, Message}
 import ws.ClientWsMsg.rr
-import ws.Message.In.{JoinUser, Load}
+import ws.Message.In.{JoinUser, LoadPendingUsers}
 import ws.Message.In.codecs._
 import ws.Message.Out.codecs._
 import org.http4s.Method.GET
@@ -21,6 +21,7 @@ import org.http4s.websocket.WebSocketFrame
 import org.http4s.HttpRoutes
 import play.api.libs.json._
 import users.{PendingUsers, UserStatusManager}
+import ws.Message.Out
 
 import scala.concurrent.duration.DurationInt
 
@@ -61,6 +62,7 @@ object Subscriber extends IOApp.Simple {
 
   } yield ()).useForever
 
+  // TODO: refactor to individual WS connection: /"users"/"id"
   def webSocketApp(
     subscriber: Subscriber,
     topic: Topic[IO, Message],
@@ -73,16 +75,15 @@ object Subscriber extends IOApp.Simple {
         send = topic
           .subscribe(10)
           .flatMap {
-            case Load =>
-              val loadPendingUsers = for {
+            case LoadPendingUsers =>
+              val res: IO[WebSocketFrame.Text] = for {
                 _ <- IO.println("Loading pending users...")
                 users <- pendingUsers.load
-                  .map(_.map(WebSocketFrame.Text(_)))
-                  .flatTap(u => IO.println(s"Finished loading pending users: $u"))
-                  .flatMap(frames => IO.delay(Stream.emits(frames)))
-              } yield users
+                _ <- IO.println(s"Finished loading pending users: $users")
+                msg = Out.PendingUsers(users).toJson
+              } yield WebSocketFrame.Text(msg)
 
-              Stream.eval(loadPendingUsers).flatten
+              Stream.eval(res)
             case ju: JoinUser =>
               val response: IO[WebSocketFrame.Text] = for {
                 _ <- IO.println(s"Attempting joining the user: $ju")
@@ -107,7 +108,7 @@ object Subscriber extends IOApp.Simple {
               .parse(body)
               .as[ClientWsMsg]
               .args
-              .getOrElse(Load)
+              .getOrElse(LoadPendingUsers)
           }),
       )
     }

@@ -1,7 +1,7 @@
 package ws
 
 import ws.Message.In
-import ws.Message.In.{JoinUser, Load}
+import ws.Message.In.{JoinUser, LoadPendingUsers}
 import ws.Message.In.codecs._
 import play.api.libs.json.{JsError, JsSuccess, JsValue, Reads}
 
@@ -22,7 +22,7 @@ object ClientWsMsg {
               case "Load"     => JsError("`Load` should not have `args`")
               case _          => JsError("unrecognized `type`")
             }
-          case None if typ == "Load" => JsSuccess(Some(Load))
+          case None if typ == "Load" => JsSuccess(Some(LoadPendingUsers))
           case _                     => JsError("empty `args`")
         }
     } yield ClientWsMsg(typ, maybeArgs)

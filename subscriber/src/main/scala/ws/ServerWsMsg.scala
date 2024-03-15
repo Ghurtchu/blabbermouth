@@ -1,7 +1,6 @@
 package ws
 
 import ws.Message.Out
-import ws.Message.Out.codecs._
 import play.api.libs.json._
 
 case class ServerWsMsg(args: Out) extends AnyVal {

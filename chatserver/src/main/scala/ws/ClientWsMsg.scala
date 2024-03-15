@@ -19,14 +19,14 @@ object ClientWsMsg {
       args <- (json \ "args")
         .validateOpt[JsValue]
         .flatMap {
-          _.map { args =>
+          case Some(args) =>
             typ match {
               case "Join"        => implicitly[Reads[Join]] reads args
               case "ChatMessage" => implicitly[Reads[ChatMessage]] reads args
               case "Pong"        => implicitly[Reads[Pong]] reads args
               case _             => JsError("unrecognized `type`")
             }
-          }.getOrElse(JsError("`args` is empty"))
+          case None => JsError("`args` is empty")
         }
     } yield ClientWsMsg(typ, args)
 }

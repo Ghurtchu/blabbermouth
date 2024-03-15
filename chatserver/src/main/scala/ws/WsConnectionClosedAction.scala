@@ -23,7 +23,7 @@ object WsConnectionClosedAction {
     (_, _, _) => ().pure[F]
 
   def of[F[_]: Monad: Console: Temporal: Concurrent: Parallel](
-    chatHistoryRef: Ref[F, Map[String, ChatHistory]],
+    chatHistory: Ref[F, Map[String, ChatHistory]],
     userStatusManager: UserStatusManager[F],
     redisPublisher: redis.RedisPublisher[F],
   ): WsConnectionClosedAction[F] = new WsConnectionClosedAction[F] {
@@ -35,21 +35,21 @@ object WsConnectionClosedAction {
         // both of them were joined at some point
         case Some(PingPong(Some(userT), Some(supportT))) =>
           if (userT.isBefore(supportT))
-            userLeftChat[F](topic, chatId, chatHistoryRef, userStatusManager, redisPublisher)
+            userLeftChat[F](topic, chatId, chatHistory, userStatusManager, redisPublisher)
           else
             Console[F].println("Support left the chat") *>
               topic.publish1(Out.SupportLeft(chatId)).void
 
         // only user has joined, so if WS get closed it means that only user has left :)
         case Some(PingPong(Some(_), None)) =>
-          userLeftChat[F](topic, chatId, chatHistoryRef, userStatusManager, redisPublisher)
+          userLeftChat[F](topic, chatId, chatHistory, userStatusManager, redisPublisher)
 
         // if PingPong is None it means that User hasn't even sent one "pong" response to WS and immediately left
         case None =>
-          userLeftChat[F](topic, chatId, chatHistoryRef, userStatusManager, redisPublisher)
+          userLeftChat[F](topic, chatId, chatHistory, userStatusManager, redisPublisher)
 
         // in any other cases it's only possible that User leaves the chat, not the Support
-        case _ => userLeftChat[F](topic, chatId, chatHistoryRef, userStatusManager, redisPublisher)
+        case _ => userLeftChat[F](topic, chatId, chatHistory, userStatusManager, redisPublisher)
       }
   }
 

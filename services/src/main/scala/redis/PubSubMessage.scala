@@ -10,14 +10,14 @@ object PubSubMessage {
     PubSubMessage(`type` = args.`type`, args = args)
 
   sealed trait Args {
-    def `type`: String = this.getClass.getSimpleName.init
+    def `type`: String = this.getClass.getSimpleName
   }
 
   object Args {
 
-    /** Sent when user joins the chat system
+    /** Sent when user joins the chat system and is waiting for the support specialist to join
       */
-    case class UserJoined(user: domain.User) extends Args
+    case class UserPending(user: domain.User) extends Args
 
     /** Sent when user leaves the chat system
       */
@@ -28,13 +28,13 @@ object PubSubMessage {
     case class SupportJoined(support: domain.Support) extends Args
 
     object codecs {
-      implicit val wuj: Writes[UserJoined] = Json.writes[domain.User].contramap(_.user)
+      implicit val wuj: Writes[UserPending] = Json.writes[domain.User].contramap(_.user)
       implicit val wul: Writes[UserLeft] = ul => play.api.libs.json.Writes.StringWrites.writes(ul.chatId)
       implicit val wsj: Writes[SupportJoined] = Json.writes[domain.Support].contramap(_.support)
       implicit val wa: Writes[Args] = {
-        case uj: Args.UserJoined    => wuj.writes(uj)
+        case uj: Args.UserPending   => wuj.writes(uj)
         case ul: Args.UserLeft      => wul.writes(ul)
-        case uj: Args.SupportJoined => wsj.writes(uj)
+        case sj: Args.SupportJoined => wsj.writes(sj)
       }
     }
   }
