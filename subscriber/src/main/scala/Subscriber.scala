@@ -74,25 +74,21 @@ object Subscriber extends IOApp.Simple {
       wsb.build(
         send = topic
           .subscribe(10)
-          .flatMap {
+          .evalMap {
             case LoadPendingUsers =>
-              val res: IO[Out.PendingUsers] = for {
+              for {
                 _ <- IO.println("Loading pending users...")
                 users <- pendingUsers.load
                 _ <- IO.println(s"Finished loading pending users: $users")
               } yield Out.PendingUsers(users)
-
-              Stream.eval(res)
             case ju: JoinUser =>
-              val response: IO[Out.RemoveUser] = for {
+              for {
                 _ <- IO.println(s"Attempting joining the user: $ju")
                 _ <- IO.println(s"Setting status to 'inactive' in Redis for user: $ju")
                 _ <- userStatusManager.setInactive(ju.toJson)
                 msg = Out.RemoveUser(ju.userId)
                 _ <- IO.println(s"sending back $msg")
               } yield msg
-
-              Stream.eval(response)
           }
           .collect { o: Out => WebSocketFrame.Text(ServerWsMsg(o).toJson) }
           .merge {
