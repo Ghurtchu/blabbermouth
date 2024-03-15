@@ -1,12 +1,13 @@
 package redis
 
 import play.api.libs.json._
+import redis.PubSubMessage.Args
 
-case class PubSubMessage(`type`: String, args: PubSubMessage.Args)
+case class PubSubMessage(`type`: String, args: Args)
 
 object PubSubMessage {
 
-  def from(args: PubSubMessage.Args): PubSubMessage =
+  def from(args: Args): PubSubMessage =
     PubSubMessage(`type` = args.`type`, args = args)
 
   sealed trait Args {

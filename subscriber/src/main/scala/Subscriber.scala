@@ -1,4 +1,5 @@
 import cats.effect._
+import cats.implicits.catsSyntaxApplicativeId
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.connection.RedisClient
@@ -7,10 +8,10 @@ import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
 import fs2.{Pure, Stream}
 import fs2.concurrent.Topic
-import json.Syntax.JsonWritesSyntax
+import json.Syntax.{JsonReadsSyntax, JsonWritesSyntax}
 import ws.{ClientWsMsg, Message, ServerWsMsg}
 import ws.ClientWsMsg.rr
-import ws.Message.In.{JoinUser, LoadPendingUsers}
+import ws.Message.In.{JoinUser, LoadPendingUsers, UnrecognizedMessage}
 import ws.Message.In.codecs._
 import ws.Message.Out.codecs._
 import org.http4s.Method.GET
@@ -99,12 +100,13 @@ object Subscriber extends IOApp.Simple {
               }
           },
         receive = topic.publish
-          .compose[Stream[IO, WebSocketFrame]](_.collect { case WebSocketFrame.Text(body, _) =>
-            Json
-              .parse(body)
-              .as[ClientWsMsg]
-              .args
-              .getOrElse(LoadPendingUsers)
+          .compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
+            body
+              .into[ClientWsMsg]
+              .fold(
+                error => IO.println(s"could not deserialize $body: $error") as UnrecognizedMessage,
+                wsMsg => IO.pure(wsMsg.args.getOrElse(LoadPendingUsers)),
+              )
           }),
       )
     }

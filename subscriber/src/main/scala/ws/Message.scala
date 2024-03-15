@@ -13,6 +13,12 @@ object Message {
   sealed trait Out extends Message
 
   object In {
+
+    /** Used in case Client sends:
+      *   - unrecognizable / malformed Json
+      *   - any other thing that can't be parsed from contextually available Reads[ClientWsMsg]
+      */
+    case object UnrecognizedMessage extends In
     // sent from UI as soon as support joins so that backend loads pending users from Redis
     case object LoadPendingUsers extends In
     // sent from UI as soon as Support clicks to User to join them
