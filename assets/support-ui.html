@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Support Chat</title>
+    <style>
+        body {
+          font-family: Arial, sans-serif;
+        }
+        #user-list {
+          margin-top: 20px;
+        }
+        .user-btn {
+          display: block;
+          margin: 5px 0;
+          padding: 10px;
+          border: none;
+          background: #007bff;
+          color: white;
+          cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+<h2>Support Chat</h2>
+<div id="user-list"></div>
+
+<script>
+    const ws = new WebSocket("ws://localhost:9001/users");
+    const userList = document.getElementById("user-list");
+    const userButtons = new Map(); // Store userId to chatId mapping
+
+    ws.onopen = () => {
+      console.log("Connected to WebSocket");
+      ws.send(JSON.stringify({ type: "Load" }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.username && data.userId) {
+          addUserButton(data.username, data.userId, data.chatId);
+        } else if (data.type === "UserPending" && data.args) {
+          addUserButton(
+            data.args.username,
+            data.args.userId,
+            data.args.chatId
+          );
+        } else if (
+          data.type === "PendingUsers" &&
+          data.args &&
+          Array.isArray(data.args.users)
+        ) {
+          data.args.users.forEach((user) => {
+            addUserButton(user.username, user.userId, user.chatId);
+          });
+        } else if (data.type === "UserLeft" && data.args) {
+          removeUserButton(data.args.chatId);
+        } else if (data.type === "ping") {
+          ws.send(JSON.stringify({ type: "pong" }));
+        }
+      } catch (e) {
+        console.error("Invalid message format", e);
+      }
+    };
+
+    function addUserButton(username, userId, chatId) {
+      if (!document.getElementById(userId)) {
+        const btn = document.createElement("button");
+        btn.textContent = username;
+        btn.className = "user-btn";
+        btn.id = userId;
+        btn.onclick = () => alert(`Chat ID: ${chatId}`);
+        userList.appendChild(btn);
+        userButtons.set(userId, chatId);
+      }
+    }
+
+    function removeUserButton(chatId) {
+      for (let [userId, storedChatId] of userButtons.entries()) {
+        if (storedChatId === chatId) {
+          const btn = document.getElementById(userId);
+          if (btn) {
+            userList.removeChild(btn);
+          }
+          userButtons.delete(userId);
+          break;
+        }
+      }
+    }
+</script>
+</body>
+</html>

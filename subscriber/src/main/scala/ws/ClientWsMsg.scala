@@ -23,6 +23,7 @@ object ClientWsMsg {
               case _          => JsError("unrecognized `type`")
             }
           case None if typ == "Load" => JsSuccess(Some(LoadPendingUsers))
+          case None if typ.nonEmpty  => JsError("unrecognized `type`")
           case _                     => JsError("empty `args`")
         }
     } yield ClientWsMsg(typ, maybeArgs)

@@ -30,7 +30,7 @@ object PubSubMessage {
 
     object codecs {
       implicit val wuj: Writes[UserPending] = Json.writes[domain.User].contramap(_.user)
-      implicit val wul: Writes[UserLeft] = ul => play.api.libs.json.Writes.StringWrites.writes(ul.chatId)
+      implicit val wul: Writes[UserLeft] = Json.writes[UserLeft]
       implicit val wsj: Writes[SupportJoined] = Json.writes[domain.Support].contramap(_.support)
       implicit val wa: Writes[Args] = {
         case uj: Args.UserPending   => wuj.writes(uj)

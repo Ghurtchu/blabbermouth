@@ -125,10 +125,10 @@ object ChatServer extends IOApp.Simple {
         val maybeChatHistory = findById(chatHistoryRef)(chatId)
         val maybeTopic = findById(chatTopicRef)(chatId)
 
-        val lazyReceive: IO[WebSocketFrameFlow] = maybeTopic.map {
+        val receiveF: IO[WebSocketFrameFlow] = maybeTopic.map {
           case Some(topic) =>
             topic.publish.compose[WebSocketFrames](_.evalMap { case Text(body, _) =>
-              body.into[ClientWsMsg] match {
+              body.as[ClientWsMsg] match {
                 case Left(error) => IO.println(s"could not deserialize $body: $error") as UnrecognizedMessage
                 case Right(clientWsMsg) =>
                   clientWsMsg.args match {
@@ -199,21 +199,21 @@ object ChatServer extends IOApp.Simple {
           case None => _ => Stream.empty
         }
 
-        val lazySend = maybeTopic.map {
+        val sendF: IO[WebSocketFrames] = maybeTopic.map {
           _.fold[WebSocketFrames](Stream.empty) {
             _.subscribe(10)
               .collect { case o: Out => Text(ServerWsMsg(o).toJson) }
               .merge {
-                // send "ping" message to WS client every 1 second
+                // send "ping" message to WS client every 500 millis
                 val ping = Text("ping")
                 Stream.emit(ping) ++
-                  Stream.awakeEvery[IO](1.second) as ping
+                  Stream.awakeEvery[IO](500.millis) as ping
               }
           }
         }
 
-        val receive: WebSocketFrames => Stream[IO, Unit] = (frames: WebSocketFrames) => Stream.eval(lazyReceive).flatMap(_(frames))
-        val send: Stream[IO, WebSocketFrame] = Stream.eval(lazySend).flatten
+        val receive: WebSocketFrames => Stream[IO, Unit] = (frames: WebSocketFrames) => Stream.eval(receiveF).flatMap(_(frames))
+        val send: Stream[IO, WebSocketFrame] = Stream.eval(sendF).flatten
 
         wsb
           .withOnClose {
@@ -221,9 +221,9 @@ object ChatServer extends IOApp.Simple {
               (maybeTopic, pingPongRef.get.map(_.get(chatId))).flatMapN {
                 case (Some(topic), pingPong) =>
                   // semantically blocks to make sure that we check the latest pong from User & Support later
-                  // in this 5 seconds the pingPong will be updated by the "pong" responses from the chat participant who didn't leave the conversation yet
+                  // in this 1.5 seconds the pingPong will be updated by the "pong" responses from the chat participant who didn't leave the conversation yet
                   // so in the end, we will compare the timestamps of last "pong" messages for user and support.
-                  Temporal[IO].sleep(5.seconds) *>
+                  Temporal[IO].sleep(1500.millis) *>
                     WsConnectionClosedAction
                       .of[IO](chatHistoryRef, userStatusManager, redisPublisher)
                       .react(topic, chatId, pingPong)

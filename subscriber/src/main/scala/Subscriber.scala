@@ -1,5 +1,5 @@
 import cats.effect._
-import cats.implicits.catsSyntaxApplicativeId
+import cats.implicits.{catsSyntaxApplicativeId, catsSyntaxOptionId, none}
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
 import dev.profunktor.redis4cats.connection.RedisClient
@@ -75,23 +75,22 @@ object Subscriber extends IOApp.Simple {
       wsb.build(
         send = topic
           .subscribe(10)
-          .evalMap {
+          .evalMapFilter {
             case LoadPendingUsers =>
               for {
-                _ <- IO.println("Loading pending users...")
-                users <- pendingUsers.load
+                users <- IO.println("Loading pending users...") *> pendingUsers.load
                 _ <- IO.println(s"Finished loading pending users: $users")
-              } yield Out.PendingUsers(users)
+              } yield Out.PendingUsers(users).some
             case ju: JoinUser =>
               for {
                 _ <- IO.println(s"Attempting joining the user: $ju")
                 _ <- IO.println(s"Setting status to 'inactive' in Redis for user: $ju")
                 _ <- userStatusManager.setInactive(ju.toJson)
-                msg = Out.RemoveUser(ju.userId)
-                _ <- IO.println(s"sending back $msg")
-              } yield msg
+                _ <- IO.println(s"removing user from UI")
+              } yield Out.RemoveUser(ju.userId).some
+            case _ => none.pure[IO]
           }
-          .collect { o: Out => WebSocketFrame.Text(ServerWsMsg(o).toJson) }
+          .collect { case o: Out => WebSocketFrame.Text(ServerWsMsg(o).toJson) }
           .merge {
             subscriber
               .evalMap { msg =>
@@ -102,7 +101,7 @@ object Subscriber extends IOApp.Simple {
         receive = topic.publish
           .compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
             body
-              .into[ClientWsMsg]
+              .as[ClientWsMsg]
               .fold(
                 error => IO.println(s"could not deserialize $body: $error") as UnrecognizedMessage,
                 wsMsg => IO.pure(wsMsg.args.getOrElse(LoadPendingUsers)),

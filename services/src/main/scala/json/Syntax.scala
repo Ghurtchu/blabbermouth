@@ -11,7 +11,7 @@ object Syntax {
   }
 
   implicit class JsonReadsSyntax(self: String) {
-    def into[A: Reads]: Either[String, A] =
+    def as[A: Reads]: Either[String, A] =
       Try(Json.parse(self))
         .fold(
           error => Left(error.toString),
@@ -23,6 +23,6 @@ object Syntax {
               ),
         )
 
-    def intoOpt[A: Reads]: Option[A] = into.toOption
+    def asOpt[A: Reads]: Option[A] = as.toOption
   }
 }

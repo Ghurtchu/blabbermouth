@@ -24,6 +24,6 @@ object PendingUsers {
           start = 0,
           end = 0,
         )
-        .map(_.flatMap(_.intoOpt[domain.User]).reverse)
+        .map(_.flatMap(_.asOpt[domain.User]).reverse)
   }
 }

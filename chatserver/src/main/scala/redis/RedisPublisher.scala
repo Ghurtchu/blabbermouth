@@ -11,9 +11,9 @@ object RedisPublisher {
 
   def empty[F[_]]: RedisPublisher[F] = new RedisPublisher[F](_ => fs2.Stream.empty)
 
-  def of[F[_]: Sync](stream: Pipe[F, String, Unit]): RedisPublisher[F] =
-    new RedisPublisher[F](stream)
+  def of[F[_]: Sync](stream: Pipe[F, String, Unit]): F[RedisPublisher[F]] =
+    Sync[F].delay(new RedisPublisher[F](stream))
 
   def make[F[_]: Sync](stream: Pipe[F, String, Unit]): Resource[F, RedisPublisher[F]] =
-    Sync[F].delay(of[F](stream)).toResource
+    of[F](stream).toResource
 }
