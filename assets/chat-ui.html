@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Support</title>
+    <style>
+        #chat-container, #loading {
+            display: none;
+        }
+        #loading {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        #chat-container {
+          display: none;
+          border: 1px solid #ccc;
+          padding: 10px;
+          margin-top: 10px;
+          width: 300px;
+        }
+        #chat-box {
+          height: 200px;
+          overflow-y: auto;
+          border-bottom: 1px solid #ccc;
+          padding-bottom: 5px;
+        }
+        .message {
+          padding: 5px;
+          border-radius: 5px;
+          margin-bottom: 5px;
+        }
+        .support {
+          background: #d1e7fd;
+          text-align: right;
+        }
+        .user {
+          background: #f1f1f1;
+          text-align: left;
+        }
+    </style>
+</head>
+<body>
+<div id="login">
+    <p>Please enter your name</p>
+    <input type="text" id="username" placeholder="Enter your name">
+    <button onclick="joinChat()">Submit</button>
+</div>
+
+<div id="loading">Loading... support will join the chat soon</div>
+
+<div id="chat-container">
+    <div id="chat-box"></div>
+    <input type="text" id="message" placeholder="Type a message">
+    <button onclick="sendMessage()">Send</button>
+</div>
+
+<script>
+    let ws, userId, username, chatId;
+
+    const chatBox = document.getElementById("chat-box");
+
+    async function joinChat() {
+        username = document.getElementById('username').value;
+        if (!username) return alert("Please enter a name");
+
+        const response = await fetch(`http://localhost:9000/user/join/${username}`);
+        const data = await response.json();
+        userId = data.userId;
+        chatId = data.chatId;
+
+        document.getElementById('login').style.display = 'none';
+        document.getElementById('loading').style.display = 'block';
+
+        connectWebSocket();
+    }
+
+    function connectWebSocket() {
+        ws = new WebSocket(`ws://localhost:9000/chat/${chatId}`);
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({
+                type: "Join",
+                args: { userId, username, from: "User" }
+            }));
+        };
+
+        ws.onmessage = (event) => {
+            const message = event.data;
+            if (message === "ping") {
+                ws.send(JSON.stringify({
+                  type: "Pong",
+                  args: {
+                    from: "User"
+                  }
+                }));
+            } else {
+                const parsedMessage = JSON.parse(message);
+                if (parsedMessage.type === "UserJoined") {
+                    console.log("User joined chat");
+                } else if (parsedMessage.type === "SupportJoined") {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('chat-container').style.display = 'block';
+                } else if (parsedMessage.type === "ChatMessage") {
+                  appendMessage(parsedMessage.args.content, parsedMessage.args.from)
+                }
+            }
+        };
+    }
+
+    function sendMessage() {
+        const message = document.getElementById('message').value;
+        if (message) {
+            ws.send(JSON.stringify(
+              {
+                type: "ChatMessage",
+                args: {
+                  content: message,
+                  from: "User",
+                  userId,
+                  supportId: "supportId",
+                  timestamp: new Date().toISOString()
+                 }
+              }
+            ));
+            document.getElementById('message').value = "";
+        }
+    }
+
+    function appendMessage(content, sender) {
+      const div = document.createElement("div");
+      div.textContent = content;
+      div.className = `message ${sender === "User" ? "user" : "support"}`;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+</script>
+</body>
+</html>

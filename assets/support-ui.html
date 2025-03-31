@@ -20,16 +20,49 @@
           color: white;
           cursor: pointer;
         }
+        #chat-container {
+          display: none;
+          border: 1px solid #ccc;
+          padding: 10px;
+          margin-top: 10px;
+          width: 300px;
+        }
+        #chat-box {
+          height: 200px;
+          overflow-y: auto;
+          border-bottom: 1px solid #ccc;
+          padding-bottom: 5px;
+        }
+        .message {
+          padding: 5px;
+          border-radius: 5px;
+          margin-bottom: 5px;
+        }
+        .support {
+          background: #d1e7fd;
+          text-align: right;
+        }
+        .user {
+          background: #f1f1f1;
+          text-align: left;
+        }
     </style>
 </head>
 <body>
 <h2>Support Chat</h2>
 <div id="user-list"></div>
+<div id="chat-container">
+    <div id="chat-box"></div>
+    <input type="text" id="message" placeholder="Type a message">
+    <button onclick="sendMessage()">Send</button>
+</div>
 
 <script>
-    const ws = new WebSocket("ws://localhost:9001/users");
+    let ws = new WebSocket("ws://localhost:9001/users");
     const userList = document.getElementById("user-list");
-    const userButtons = new Map(); // Store userId to chatId mapping
+    const chatContainer = document.getElementById("chat-container");
+    const chatBox = document.getElementById("chat-box");
+    let chatWs, chatId, supportUserName = "Lela", supportId, userId;
 
     ws.onopen = () => {
       console.log("Connected to WebSocket");
@@ -39,26 +72,12 @@
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.username && data.userId) {
-          addUserButton(data.username, data.userId, data.chatId);
-        } else if (data.type === "UserPending" && data.args) {
-          addUserButton(
-            data.args.username,
-            data.args.userId,
-            data.args.chatId
-          );
-        } else if (
-          data.type === "PendingUsers" &&
-          data.args &&
-          Array.isArray(data.args.users)
-        ) {
-          data.args.users.forEach((user) => {
-            addUserButton(user.username, user.userId, user.chatId);
-          });
-        } else if (data.type === "UserLeft" && data.args) {
-          removeUserButton(data.args.chatId);
-        } else if (data.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong" }));
+        if (data.type === "UserPending" && data.args) {
+          addUserButton(data.args.username, data.args.userId, data.args.chatId);
+        } else if (data.type === "PendingUsers" && data.args && Array.isArray(data.args.users)) {
+          data.args.users.forEach(user => addUserButton(user.username, user.userId, user.chatId));
+        } else if (data.type === "UserLeft" || data.type === "RemoveUser") {
+          removeUserButton(data.args.userId);
         }
       } catch (e) {
         console.error("Invalid message format", e);
@@ -71,23 +90,66 @@
         btn.textContent = username;
         btn.className = "user-btn";
         btn.id = userId;
-        btn.onclick = () => alert(`Chat ID: ${chatId}`);
+        btn.onclick = () => joinUser(userId, chatId, username);
         userList.appendChild(btn);
-        userButtons.set(userId, chatId);
       }
     }
 
-    function removeUserButton(chatId) {
-      for (let [userId, storedChatId] of userButtons.entries()) {
-        if (storedChatId === chatId) {
-          const btn = document.getElementById(userId);
-          if (btn) {
-            userList.removeChild(btn);
-          }
-          userButtons.delete(userId);
-          break;
+    function removeUserButton(userId) {
+      const btn = document.getElementById(userId);
+      if (btn) userList.removeChild(btn);
+    }
+
+    function joinUser(userIdParam, chatIdParam, username) {
+      userId = userIdParam;
+      chatId = chatIdParam;
+      chatBox.innerHTML = "";
+      chatContainer.style.display = "block";
+      userList.innerHTML = ""; // Remove all user buttons
+
+      if (chatWs) chatWs.close();
+      if (ws) { ws.close(); ws = null; } // Close initial WebSocket connection
+
+      chatWs = new WebSocket(`ws://localhost:9000/chat/${chatId}`);
+
+      chatWs.onopen = () => {
+        chatWs.send(JSON.stringify({
+          type: "Join",
+          args: { userId, supportUserName, username, from: "Support" }
+        }));
+      };
+
+      chatWs.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "ChatMessage") {
+          appendMessage(data.args.content, data.args.from);
         }
+      };
+    }
+
+    function sendMessage() {
+      const message = document.getElementById('message').value;
+      if (message) {
+        chatWs.send(JSON.stringify({
+          type: "ChatMessage",
+          args: {
+            content: message,
+            from: "Support",
+            userId,
+            "supportId": "supportId",
+            timestamp: new Date().toISOString()
+          }
+        }));
+        document.getElementById('message').value = "";
       }
+    }
+
+    function appendMessage(content, sender) {
+      const div = document.createElement("div");
+      div.textContent = content;
+      div.className = `message ${sender === "Support" ? "support" : "user"}`;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
 </script>
 </body>
