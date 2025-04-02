@@ -26,12 +26,14 @@
           padding: 10px;
           margin-top: 10px;
           width: 300px;
+          position: relative;
         }
         #chat-box {
           height: 200px;
           overflow-y: auto;
           border-bottom: 1px solid #ccc;
-          padding-bottom: 5px;
+          padding: 5px;
+          margin-top: 25px; /* Adjusted to prevent overlap */
         }
         .message {
           padding: 5px;
@@ -46,12 +48,29 @@
           background: #f1f1f1;
           text-align: left;
         }
+        .exit-btn {
+          position: absolute;
+          top: 5px;
+          right: 5px;
+          background: red;
+          color: white;
+          border: none;
+          width: 20px;
+          height: 20px;
+          font-size: 14px;
+          cursor: pointer;
+          border-radius: 50%;
+          line-height: 20px;
+          text-align: center;
+          z-index: 10;
+        }
     </style>
 </head>
 <body>
 <h2>Support Chat</h2>
 <div id="user-list"></div>
 <div id="chat-container">
+    <button class="exit-btn" onclick="exitChat()">X</button>
     <div id="chat-box"></div>
     <input type="text" id="message" placeholder="Type a message">
     <button onclick="sendMessage()">Send</button>
@@ -105,11 +124,9 @@
       chatId = chatIdParam;
       chatBox.innerHTML = "";
       chatContainer.style.display = "block";
-      userList.innerHTML = ""; // Remove all user buttons
-
+      userList.innerHTML = "";
       if (chatWs) chatWs.close();
-      if (ws) { ws.close(); ws = null; } // Close initial WebSocket connection
-
+      if (ws) { ws.close(); ws = null; }
       chatWs = new WebSocket(`ws://localhost:9000/chat/${chatId}`);
 
       chatWs.onopen = () => {
@@ -120,11 +137,32 @@
       };
 
       chatWs.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === "ChatMessage") {
-          appendMessage(data.args.content, data.args.from);
+        const message = event.data;
+        if (message === "ping") {
+          chatWs.send(JSON.stringify({
+            type: "Pong",
+            args: { from: "Support" }
+          }));
+        } else {
+          const data = JSON.parse(event.data);
+          if (data.type === "ChatMessage") {
+            appendMessage(data.args.content, data.args.from);
+          }else if (data.type === "UserLeft") {
+                indicateUserLeft();
+            }
         }
       };
+    }
+
+    function indicateUserLeft() {
+        const div = document.createElement("div");
+        div.textContent = "The user has left the chat.";
+        div.style.color = "red";
+        div.style.fontStyle = "italic";
+        div.style.textAlign = "center";
+        div.className = "message";
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
     }
 
     function sendMessage() {
@@ -150,6 +188,14 @@
       div.className = `message ${sender === "Support" ? "support" : "user"}`;
       chatBox.appendChild(div);
       chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function exitChat() {
+        if (chatWs) {
+            chatWs.close();
+            chatWs = null;
+        }
+        chatContainer.style.display = "none";
     }
 </script>
 </body>

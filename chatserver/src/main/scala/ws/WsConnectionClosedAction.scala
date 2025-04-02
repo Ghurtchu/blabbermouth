@@ -10,11 +10,11 @@ import json.Syntax.JsonWritesSyntax
 import redis.PubSubMessage
 import redis.PubSubMessage._
 import users.UserStatusManager
-import ws.Message.Out
+import ws.Message.{Out, SupportLeft}
 import ws.Message.Out.ChatHistory
 
 trait WsConnectionClosedAction[F[_]] {
-  def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit]
+  def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit]
 }
 
 object WsConnectionClosedAction {
@@ -30,15 +30,18 @@ object WsConnectionClosedAction {
 
     // TODO: This logic can be refined..
     // TODO: Draw diagrams with timestamps to understand all the cases
-    def react(topic: Topic[F, Message], chatId: String, pingPong: Option[PingPong]): F[Unit] =
+    def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit] =
       pingPong match {
         // both of them were joined at some point
-        case Some(PingPong(Some(userT), Some(supportT))) =>
-          if (userT.isBefore(supportT))
-            userLeftChat(topic, chatId, chatHistory, userStatusManager, redisPublisher)
-          else
+        case PingPong(Some(userT), Some(supportT)) =>
+          if (userT.isBefore(supportT)) {
+            for {
+              _ <- Console[F].println(s"$userT, $supportT")
+              _ <- userLeftChat(topic, chatId, chatHistory, userStatusManager, redisPublisher)
+            } yield ()
+          } else
             Console[F].println("Support left the chat") *>
-              topic.publish1(Out.SupportLeft(chatId)).void
+              topic.publish1(SupportLeft(chatId)).void
 
         case _ => userLeftChat(topic, chatId, chatHistory, userStatusManager, redisPublisher)
 //        // only user has joined, so if WS get closed it means that only user has left :)

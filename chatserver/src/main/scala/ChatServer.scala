@@ -25,6 +25,8 @@ import org.http4s.websocket.WebSocketFrame.Text
 import redis.{PubSubMessage, RedisPublisher}
 import PubSubMessage.Args.codecs._
 import PubSubMessage._
+import cats.Applicative
+import cats.data.OptionT
 import domain.{ChatParticipant, User}
 import json.Syntax.{JsonReadsSyntax, JsonWritesSyntax}
 import org.http4s.server.middleware.CORS
@@ -125,9 +127,9 @@ object ChatServer extends IOApp.Simple {
             }
         case GET -> Root / "chat" / chatId =>
           val maybeChatHistory = findById(chatHistoryRef)(chatId)
-          val maybeTopic = findById(chatTopicRef)(chatId)
+          val maybeTopicF = findById(chatTopicRef)(chatId)
 
-          val receiveF: IO[WebSocketFrameFlow] = maybeTopic.map {
+          val receiveF: IO[WebSocketFrameFlow] = maybeTopicF.map {
             case Some(topic) =>
               topic.publish.compose[WebSocketFrames](_.evalMap { case Text(body, _) =>
                 body.as[ClientWsMsg] match {
@@ -201,7 +203,7 @@ object ChatServer extends IOApp.Simple {
             case None => _ => Stream.empty
           }
 
-          val sendF: IO[WebSocketFrames] = maybeTopic.map {
+          val sendF: IO[WebSocketFrames] = maybeTopicF.map {
             _.fold[WebSocketFrames](Stream.empty) {
               _.subscribe(10)
                 .collect { case o: Out => Text(ServerWsMsg(o).toJson) }
@@ -219,18 +221,17 @@ object ChatServer extends IOApp.Simple {
 
           wsb
             .withOnClose {
-              Console[IO].println("WS connection was closed") *>
-                (maybeTopic, pingPongRef.get.map(_.get(chatId))).flatMapN {
-                  case (Some(topic), pingPong) =>
-                    // semantically blocks to make sure that we check the latest pong from User & Support later
-                    // in this 1.5 seconds the pingPong will be updated by the "pong" responses from the chat participant who didn't leave the conversation yet
-                    // so in the end, we will compare the timestamps of last "pong" messages for user and support.
-                    Temporal[IO].sleep(1500.millis) *>
-                      WsConnectionClosedAction
-                        .of[IO](chatHistoryRef, userStatusManager, redisPublisher)
-                        .react(topic, chatId, pingPong)
-                  case _ => ().pure[IO]
+              (for {
+                _ <- OptionT.liftF(Console[IO].println("WS connection was closed"))
+                topic <- OptionT(maybeTopicF)
+                _ <- OptionT.liftF(Temporal[IO].sleep(1500.millis))
+                pingPong <- OptionT(pingPongRef.get.map(_.get(chatId)))
+                _ <- OptionT.liftF {
+                  WsConnectionClosedAction
+                    .of[IO](chatHistoryRef, userStatusManager, redisPublisher)
+                    .react(topic, chatId, pingPong)
                 }
+              } yield ()).value.void
             }
             .build(send, receive)
       }

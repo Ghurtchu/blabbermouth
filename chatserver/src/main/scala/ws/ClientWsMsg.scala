@@ -1,6 +1,6 @@
 package ws
 
-import ws.Message.{ChatMessage, In}
+import ws.Message.{ChatMessage, In, SupportLeft}
 import ws.Message.In.{Join, Pong}
 import play.api.libs.json._
 
@@ -24,6 +24,7 @@ object ClientWsMsg {
               case "Join"        => implicitly[Reads[Join]] reads args
               case "ChatMessage" => implicitly[Reads[ChatMessage]] reads args
               case "Pong"        => implicitly[Reads[Pong]] reads args
+              case "SupportLeft" => implicitly[Reads[SupportLeft]] reads args
               case _             => JsError("unrecognized `type`")
             }
           case None => JsError("`args` is empty")

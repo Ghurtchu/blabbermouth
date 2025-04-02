@@ -28,8 +28,12 @@ object Message {
   ) extends In
       with Out
 
+  // Sent to Client when Support leaves the chat system
+  case class SupportLeft(chatId: String) extends In with Out
+
   object codecs {
     implicit val cmf: Format[ChatMessage] = Json.format[ChatMessage]
+    implicit val slf: Format[SupportLeft] = Json.format[SupportLeft]
   }
 
   // Groups all In messages
@@ -110,8 +114,6 @@ object Message {
     case class ChatExpired(chatId: String) extends Out
     // Sent to Client when User leaves the chat system
     case class UserLeft(chatId: String) extends Out
-    // Sent to Client when Support leaves the chat system
-    case class SupportLeft(chatId: String) extends Out
 
     object codecs {
       import Message.codecs._
@@ -123,7 +125,6 @@ object Message {
       implicit val wr: Writes[Registered] = Json.writes[Registered]
       implicit val rj: Reads[Join] = Json.reads[Join]
       implicit val wul: Writes[UserLeft] = Json.writes[UserLeft]
-      implicit val wsl: Writes[SupportLeft] = Json.writes[SupportLeft]
       implicit val wo: Writes[Out] = {
         case o: UserJoined    => wuj writes o
         case o: SupportJoined => wsj writes o
@@ -132,7 +133,7 @@ object Message {
         case o: ChatHistory   => wch writes o
         case o: ChatExpired   => wce writes o
         case o: UserLeft      => wul writes o
-        case o: SupportLeft   => wsl writes o
+        case o: SupportLeft   => slf writes o
       }
     }
   }
