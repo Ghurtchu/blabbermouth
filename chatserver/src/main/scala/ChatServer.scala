@@ -1,7 +1,7 @@
 import cats.effect._
 import cats.effect.std.Console
 import cats.syntax.all._
-import ws.{ClientWsMsg, Message, PingPong, ServerWsMsg}
+import ws.{ClientWsMsg, Message, ServerWsMsg}
 import ws.Message.Out.codecs._
 import ws.Message.In._
 import ws.Message.Out._
@@ -27,6 +27,7 @@ import PubSubMessage.Args.codecs._
 import PubSubMessage._
 import cats.Applicative
 import cats.data.OptionT
+import connection.{PingPong, WebSocketConnectionClosedAction}
 import domain.{ChatParticipant, User}
 import json.Syntax.{JsonReadsSyntax, JsonWritesSyntax}
 import org.http4s.server.middleware.CORS
@@ -216,8 +217,8 @@ object ChatServer extends IOApp.Simple {
             }
           }
 
-          val receive: WebSocketFrames => Stream[IO, Unit] = (frames: WebSocketFrames) => Stream.eval(receiveF).flatMap(_(frames))
           val send: Stream[IO, WebSocketFrame] = Stream.eval(sendF).flatten
+          val receive: WebSocketFrames => Stream[IO, Unit] = (frames: WebSocketFrames) => Stream.eval(receiveF).flatMap(_(frames))
 
           wsb
             .withOnClose {
@@ -227,8 +228,8 @@ object ChatServer extends IOApp.Simple {
                 _ <- OptionT.liftF(Temporal[IO].sleep(1500.millis))
                 pingPong <- OptionT(pingPongRef.get.map(_.get(chatId)))
                 _ <- OptionT.liftF {
-                  WsConnectionClosedAction
-                    .of[IO](chatHistoryRef, userStatusManager, redisPublisher)
+                  WebSocketConnectionClosedAction
+                    .of[IO](chatHistoryRef, userStatusManager, redisPublisher, pingPongRef)
                     .react(topic, chatId, pingPong)
                 }
               } yield ()).value.void

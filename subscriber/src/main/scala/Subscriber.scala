@@ -1,4 +1,5 @@
 import cats.effect._
+import cats.effect.std.Queue
 import cats.implicits.{catsSyntaxApplicativeId, catsSyntaxOptionId, none}
 import com.comcast.ip4s.IpLiteralSyntax
 import dev.profunktor.redis4cats.Redis
@@ -6,7 +7,7 @@ import dev.profunktor.redis4cats.connection.RedisClient
 import dev.profunktor.redis4cats.data.{RedisChannel, RedisCodec}
 import dev.profunktor.redis4cats.pubsub.PubSub
 import dev.profunktor.redis4cats.effect.Log.NoOp.instance
-import fs2.{Pure, Stream}
+import fs2.{Pipe, Pure, Stream}
 import fs2.concurrent.Topic
 import json.Syntax.{JsonReadsSyntax, JsonWritesSyntax}
 import ws.{ClientWsMsg, Message, ServerWsMsg}
@@ -20,6 +21,8 @@ import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.server.websocket.WebSocketBuilder2
 import org.http4s.websocket.WebSocketFrame
 import org.http4s.HttpRoutes
+import org.http4s.dsl.Http4sDsl
+import org.http4s.websocket.WebSocketFrame.Text
 import play.api.libs.json._
 import users.{PendingUsers, UserStatusManager}
 import ws.Message.Out
@@ -32,6 +35,9 @@ object Subscriber extends IOApp.Simple {
 
   type PubSubMessage = String
   type Subscriber = Stream[IO, PubSubMessage]
+  type WebSocketFrames = Stream[IO, WebSocketFrame]
+  type Flow[A] = Pipe[IO, A, Unit]
+  type WebSocketFrameFlow = Flow[WebSocketFrame]
 
   // TODO: parse from config later
   val redisLocation = "redis://redis"
@@ -45,7 +51,7 @@ object Subscriber extends IOApp.Simple {
       .map(_.subscribe(channel))
 
   override val run = (for {
-    topic <- Resource.eval(Topic[IO, Message])
+    qs <- Resource.eval(Ref.of[IO, Map[String, Queue[IO, Message]]](Map.empty))
     baseRedisClient <- RedisClient[IO].from(redisLocation)
     redisClient <- Redis[IO]
       .fromClient(client = baseRedisClient, codec = RedisCodec.Utf8)
@@ -57,29 +63,39 @@ object Subscriber extends IOApp.Simple {
       .default[IO]
       .withHost(host"0.0.0.0")
       .withPort(port"9001")
-      .withHttpWebSocketApp(webSocketApp(subscriber, topic, _, pendingUsers, userStatusManager).orNotFound)
+      .withHttpWebSocketApp(webSocketApp(subscriber, qs, _, pendingUsers, userStatusManager).orNotFound)
       .withIdleTimeout(60.minutes)
       .build
 
   } yield ()).useForever
 
+  private def findById[A](cache: Ref[IO, Map[String, A]])(id: String): IO[Option[A]] =
+    cache.get.map(_.get(id))
+
   // TODO: refactor to individual WS connection: /"users"/"id"
   def webSocketApp(
     subscriber: Subscriber,
-    topic: Topic[IO, Message],
+    // each connection must have its own topic
+    qsRef: Ref[IO, Map[String, Queue[IO, Message]]],
     wsb: WebSocketBuilder2[IO],
     pendingUsers: PendingUsers[IO],
     userStatusManager: UserStatusManager[IO],
   ): HttpRoutes[IO] =
-    HttpRoutes.of[IO] { case GET -> Root / "users" =>
-      wsb.build(
-        send = topic
-          .subscribe(10)
+    HttpRoutes.of[IO] { case GET -> Root / "users" / supportId =>
+      for {
+        queueOpt <- qsRef.get.map(_.get(supportId))
+        receiveAndQueue <- queueOpt match {
+          case Some(queue) => IO.delay(receive(queue), queue)
+          case None        => initQueueAndDefineReceive(qsRef, supportId)
+        }
+        (receive, queue) = receiveAndQueue
+        send = Stream
+          .fromQueueUnterminated(queue)
           .evalMapFilter {
             case LoadPendingUsers =>
               for {
-                users <- IO.println("Loading pending users...") *> pendingUsers.load
-                _ <- IO.println(s"Finished loading pending users: $users")
+                users <- IO.println(s"Loading pending users for support: $supportId") *> pendingUsers.load
+                _ <- IO.println(s"Finished loading pending users for support: $supportId, users: $users")
               } yield Out.PendingUsers(users).some
             case ju: JoinUser =>
               for {
@@ -97,16 +113,28 @@ object Subscriber extends IOApp.Simple {
                 IO.println(s"$msg was consumed from Redis Pub/Sub") as
                   WebSocketFrame.Text(msg)
               }
-          },
-        receive = topic.publish
-          .compose[Stream[IO, WebSocketFrame]](_.evalMap { case WebSocketFrame.Text(body, _) =>
-            body
-              .as[ClientWsMsg]
-              .fold(
-                error => IO.println(s"could not deserialize $body: $error") as UnrecognizedMessage,
-                wsMsg => IO.pure(wsMsg.args.getOrElse(LoadPendingUsers)),
-              )
-          }),
-      )
+          }
+        ws <- wsb.build(send, receive)
+      } yield ws
     }
+
+  private def initQueueAndDefineReceive(
+    qsRef: Ref[IO, Map[PubSubMessage, Queue[IO, Message]]],
+    supportId: String,
+  ): IO[(WebSocketFrameFlow, Queue[IO, Message])] =
+    for {
+      queue <- Queue.circularBuffer[IO, Message](10)
+      _ <- qsRef.update(_.updated(supportId, queue))
+    } yield receive(queue) -> queue
+
+  private def receive(queue: Queue[IO, Message]): Flow[WebSocketFrame] = _ evalMap {
+    case WebSocketFrame.Text(msg, _) =>
+      msg
+        .as[ClientWsMsg]
+        .fold(
+          error => IO.println(s"could not deserialize $msg: $error"),
+          wsMsg => queue.offer(wsMsg.args.getOrElse(LoadPendingUsers)),
+        )
+    case other => IO.println(s"received unexpected message: $other")
+  }
 }
