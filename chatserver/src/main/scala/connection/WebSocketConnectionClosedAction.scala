@@ -30,32 +30,26 @@ object WebSocketConnectionClosedAction {
     redisPublisher: redis.RedisPublisher[F],
     pingPongRef: Ref[F, Map[String, PingPong]],
   ): WebSocketConnectionClosedAction[F] = new WebSocketConnectionClosedAction[F] {
-    def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit] =
+    def react(topic: Topic[F, Message], chatId: String, pingPong: PingPong): F[Unit] = {
+      def updatePingPong(modify: PingPong => PingPong): F[Unit] =
+        pingPongRef.update(_.updatedWith(chatId)(_.map(modify)))
+
       WebSocketClosureParticipantIdentifier.from(pingPong) match {
         case Some(ChatParticipant.User) =>
           for {
+            _ <- updatePingPong(_.dropUser)
             _ <- userLeftChat(topic, chatId, chatHistory, userStatusManager, redisPublisher)
-            _ <- pingPongRef.update {
-              _.updatedWith(chatId) {
-                case Some(pingPong) => Some(pingPong.dropUser)
-                case None           => None
-              }
-            }
           } yield ()
         case Some(ChatParticipant.Support) =>
           for {
+            _ <- updatePingPong(_.dropSupport)
             _ <- Console[F].println("Support left the chat")
             _ <- topic.publish1(SupportLeft(chatId)).void
-            _ <- pingPongRef.update {
-              _.updatedWith(chatId) {
-                case Some(pingPong) => Some(pingPong.dropSupport)
-                case None           => None
-              }
-            }
           } yield ()
         // maybe add a warning or debug to indicate that such a rare scenario might occur
         case None => ().pure[F]
       }
+    }
   }
 
   private def userLeftChat[F[_]: Monad: Console: Concurrent: Parallel](
