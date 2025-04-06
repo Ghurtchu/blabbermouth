@@ -22,7 +22,7 @@ object PubSubMessage {
 
     /** Sent when user leaves the chat system
       */
-    case class UserLeft(chatId: String) extends Args
+    case class UserLeft(user: domain.User) extends Args
 
     /** Sent when Support specialist joins the user's chat
       */
@@ -30,7 +30,7 @@ object PubSubMessage {
 
     object codecs {
       implicit val wuj: Writes[UserPending] = Json.writes[domain.User].contramap(_.user)
-      implicit val wul: Writes[UserLeft] = Json.writes[UserLeft]
+      implicit val wul: Writes[UserLeft] = Json.writes[domain.User].contramap(_.user)
       implicit val wsj: Writes[SupportJoined] = Json.writes[domain.Support].contramap(_.support)
       implicit val wa: Writes[Args] = {
         case uj: Args.UserPending   => wuj.writes(uj)

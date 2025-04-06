@@ -1,6 +1,6 @@
 # Live Support Chat Server
 
-Currently creating independent SPA-s for user and support.
+Currently creating independent SPA-s for user and support.  
 
 Service oriented architecture with two backends:
 - `ChatServer`:
