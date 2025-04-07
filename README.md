@@ -2,9 +2,22 @@
 
 Currently creating independent SPA-s for user and support.
 
+Typical flow:
+
+1) User attempts to register themselves to the live support chat system
+
 ![My Image](assets/registration.png)
+
+2)They get notified to wait (stay reactive!)
+
 ![My Image](assets/loading.png)
+
+3) Support specialists receive a notification on UI about pending user
+
 ![My Image](assets/pending_users.png)
+
+4) One of the support specialists clicks on the button and chat session starts
+
 ![My Image](assets/chat.png)
 
 Service oriented architecture with two backends:
