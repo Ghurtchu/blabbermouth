@@ -8,7 +8,7 @@ Typical flow:
 
 ![My Image](assets/registration.png)
 
-2)They get notified to wait (stay reactive!)
+2) They get notified to wait (stay reactive!)
 
 ![My Image](assets/loading.png)
 
