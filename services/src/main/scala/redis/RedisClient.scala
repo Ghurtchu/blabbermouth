@@ -10,6 +10,8 @@ import dev.profunktor.redis4cats.algebra.SortedSetCommands
 import dev.profunktor.redis4cats.effects.{Score, ScoreWithValue, ZRange}
 import io.lettuce.core.ZAddArgs
 
+/** Convenient wrapper for redis client
+  */
 trait RedisClient[F[_]] {
 
   def send(

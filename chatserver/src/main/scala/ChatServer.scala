@@ -29,7 +29,7 @@ import cats.Applicative
 import cats.data.OptionT
 import connection.{PingPong, WebSocketConnectionClosedAction}
 import domain.{ChatParticipant, User}
-import json.Syntax.{JsonReadsSyntax, JsonWritesSyntax}
+import json.syntax.{JsonReadsSyntax, JsonWritesSyntax}
 import org.http4s.server.middleware.CORS
 import users.UserStatusManager
 
@@ -60,7 +60,7 @@ object ChatServer extends IOApp.Simple {
     Resource.eval(IO.ref(Map.empty[K, V]))
 
   val run = (for {
-    redisClientAndPublisher <- RedisClient[IO]
+    (redisClient, redisPublisher) <- RedisClient[IO]
       .from(strUri = redisLocation)
       .flatMap { redisClient =>
         for {
@@ -73,7 +73,6 @@ object ChatServer extends IOApp.Simple {
             .flatMap(redis.RedisPublisher.make[IO])
         } yield (client, publisher)
       }
-    (redisClient, redisPublisher) = redisClientAndPublisher
     userStatusManager = UserStatusManager.of[IO](redisClient)
     chatHistoryRef <- mkRef[UserId, ChatHistory]
     chatTopicRef <- mkRef[ChatId, Topic[IO, Message]]

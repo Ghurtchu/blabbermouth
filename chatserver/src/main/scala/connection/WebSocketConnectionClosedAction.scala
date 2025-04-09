@@ -7,7 +7,7 @@ import cats.syntax.all._
 import cats.{Applicative, Monad, Parallel}
 import domain.ChatParticipant
 import fs2.concurrent.Topic
-import json.Syntax.JsonWritesSyntax
+import json.syntax.JsonWritesSyntax
 import redis.PubSubMessage
 import redis.PubSubMessage._
 import users.UserStatusManager

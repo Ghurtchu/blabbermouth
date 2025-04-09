@@ -3,6 +3,7 @@ package redis
 import play.api.libs.json._
 import redis.PubSubMessage.Args
 
+/** Representation of Redis pub/sub message */
 case class PubSubMessage(`type`: String, args: Args)
 
 object PubSubMessage {
@@ -29,20 +30,20 @@ object PubSubMessage {
     case class SupportJoined(support: domain.Support) extends Args
 
     object codecs {
-      implicit val wuj: Writes[UserPending] = Json.writes[domain.User].contramap(_.user)
-      implicit val wul: Writes[UserLeft] = Json.writes[domain.User].contramap(_.user)
-      implicit val wsj: Writes[SupportJoined] = Json.writes[domain.Support].contramap(_.support)
-      implicit val wa: Writes[Args] = {
-        case uj: Args.UserPending   => wuj.writes(uj)
-        case ul: Args.UserLeft      => wul.writes(ul)
-        case sj: Args.SupportJoined => wsj.writes(sj)
+      implicit val WritesUserPending: Writes[UserPending] = Json.writes[domain.User].contramap(_.user)
+      implicit val WritesUserLeft: Writes[UserLeft] = Json.writes[domain.User].contramap(_.user)
+      implicit val WritesSupportJoined: Writes[SupportJoined] = Json.writes[domain.Support].contramap(_.support)
+      implicit val WritesArgs: Writes[Args] = {
+        case up: Args.UserPending   => WritesUserPending.writes(up)
+        case ul: Args.UserLeft      => WritesUserLeft.writes(ul)
+        case sj: Args.SupportJoined => WritesSupportJoined.writes(sj)
       }
     }
   }
 
   import Args.codecs._
 
-  implicit val wpsm: Writes[PubSubMessage] = (psm: PubSubMessage) =>
+  implicit val WritesPubSubMessage: Writes[PubSubMessage] = (psm: PubSubMessage) =>
     JsObject(
       Map(
         "type" -> JsString(psm.`type`),

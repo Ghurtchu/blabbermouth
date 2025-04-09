@@ -20,7 +20,11 @@ object Dependencies {
     "dev.profunktor" %% "redis4cats-streams" % "1.4.1",
   )
 
-  val Services = Cats ++ Redis
+  val BetterMonadicFor = "com.olegpy" %% "better-monadic-for" % "0.3.1"
+
+  val Utils = Seq(BetterMonadicFor)
+
+  val Services = Cats ++ Redis ++ Utils
 
   val ChatServer = Http
 

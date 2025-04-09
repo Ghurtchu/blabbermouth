@@ -3,9 +3,11 @@ package users
 import cats.{Applicative, Functor}
 import cats.syntax.applicative._
 import cats.syntax.functor._
-import json.Syntax.JsonReadsSyntax
+import json.syntax.JsonReadsSyntax
 import redis.RedisClient
 
+/** Loads users with "pending" statuses from Redis.
+  */
 trait PendingUsers[F[_]] {
   def load: F[List[domain.User]]
 }

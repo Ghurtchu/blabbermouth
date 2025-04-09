@@ -10,9 +10,11 @@ val commonSettings = Seq(
 )
 
 lazy val root = (project in file("."))
+  .dependsOn(chatserver, subscriber)
   .aggregate(chatserver, subscriber)
   .settings(name := "root")
   .settings(commonSettings)
+  .settings(addCompilerPlugin(Dependencies.BetterMonadicFor))
 
 lazy val domain = (project in file("domain"))
   .settings(
@@ -36,6 +38,7 @@ lazy val chatserver = (project in file("chatserver"))
     libraryDependencies := Dependencies.ChatServer,
   )
   .settings(commonSettings)
+  .settings(addCompilerPlugin(Dependencies.BetterMonadicFor))
   .dependsOn(services)
 
 lazy val subscriber = (project in file("subscriber"))
@@ -46,4 +49,5 @@ lazy val subscriber = (project in file("subscriber"))
     libraryDependencies := Dependencies.Subscriber,
   )
   .settings(commonSettings)
+  .settings(addCompilerPlugin(Dependencies.BetterMonadicFor))
   .dependsOn(services)
